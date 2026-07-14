@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SpeakWise 智能面试助手 · 交互预览原型</title>
+<style>
+  :root{
+    --bg:#f7f7f8; --card:#ffffff; --fg:#09090b; --muted:#f4f4f5; --muted-fg:#71717a;
+    --border:#e4e4e7; --primary:#18181b; --primary-fg:#fafafa; --ring:#a1a1aa;
+    --accent:#4f46e5; --accent-soft:#eef2ff; --green:#16a34a; --green-soft:#f0fdf4;
+    --amber:#d97706; --amber-soft:#fffbeb; --radius:10px;
+    --shadow:0 1px 2px rgba(0,0,0,.05),0 1px 3px rgba(0,0,0,.04);
+  }
+  [data-theme="dark"]{
+    --bg:#09090b; --card:#131316; --fg:#fafafa; --muted:#1c1c20; --muted-fg:#a1a1aa;
+    --border:#27272a; --primary:#fafafa; --primary-fg:#18181b; --ring:#52525b;
+    --accent:#818cf8; --accent-soft:#1e1b4b; --green:#4ade80; --green-soft:#0f2417;
+    --amber:#fbbf24; --amber-soft:#2a1f07;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--fg); font-size:14px; line-height:1.6;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* header */
+  header{
+    position:sticky; top:0; z-index:20; height:56px; display:flex; align-items:center;
+    justify-content:space-between; padding:0 20px; background:var(--card);
+    border-bottom:1px solid var(--border);
+  }
+  .brand{display:flex; align-items:center; gap:10px; font-weight:600}
+  .logo{width:28px;height:28px;border-radius:8px;background:var(--primary);color:var(--primary-fg);
+    display:grid;place-items:center;font-weight:700;font-size:15px}
+  .brand small{color:var(--muted-fg);font-weight:400;margin-left:4px}
+  .header-right{display:flex;align-items:center;gap:10px}
+  .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:3px 9px;border-radius:999px;
+    border:1px solid var(--border);background:var(--muted);color:var(--muted-fg)}
+  .badge.dot::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--amber)}
+  /* layout */
+  .layout{display:grid;grid-template-columns:232px 1fr;min-height:calc(100vh - 56px)}
+  aside{border-right:1px solid var(--border);background:var(--card);padding:16px 12px}
+  nav{display:flex;flex-direction:column;gap:2px}
+  .nav-item{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;cursor:pointer;
+    color:var(--muted-fg);font-weight:500;user-select:none;transition:.12s}
+  .nav-item:hover{background:var(--muted);color:var(--fg)}
+  .nav-item.active{background:var(--muted);color:var(--fg)}
+  .nav-item.active .ic{color:var(--accent)}
+  .nav-item .ic{width:18px;height:18px;flex:none}
+  .nav-sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-fg);
+    padding:14px 11px 6px;font-weight:600}
+  main{padding:26px 30px;max-width:920px}
+  .page{display:none;animation:fade .25s ease}
+  .page.show{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  h1.page-title{font-size:20px;font-weight:600;margin:0 0 4px}
+  .page-sub{color:var(--muted-fg);margin:0 0 22px}
+  /* card */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}
+  .card h3{margin:0 0 2px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .card .hint{color:var(--muted-fg);font-size:12.5px;margin:0 0 14px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .field{flex:1;min-width:180px;margin-bottom:12px}
+  label.lbl{display:block;font-size:12.5px;font-weight:500;margin-bottom:6px;color:var(--fg)}
+  input[type=text],input[type=email],textarea,select{
+    width:100%;background:var(--card);color:var(--fg);border:1px solid var(--border);
+    border-radius:8px;padding:8px 11px;font-size:13.5px;font-family:inherit;outline:none;transition:.12s}
+  input:focus,textarea:focus,select:focus{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 25%,transparent)}
+  textarea{resize:vertical;line-height:1.6}
+  /* buttons */
+  .btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--card);
+    color:var(--fg);padding:8px 14px;border-radius:8px;font-size:13.5px;font-weight:500;cursor:pointer;
+    font-family:inherit;transition:.12s}
+  .btn:hover{background:var(--muted)}
+  .btn.primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+  .btn.primary:hover{opacity:.9}
+  .btn.sm{padding:5px 10px;font-size:12.5px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn .ic{width:15px;height:15px}
+  /* chips / tags */
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;padding:4px 10px;border-radius:7px;
+    background:var(--muted);border:1px solid var(--border)}
+  .chip .x{cursor:pointer;color:var(--muted-fg);font-weight:700}
+  .chip.accent{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+  .chip.green{background:var(--green-soft);color:var(--green);border-color:transparent}
+  /* list item */
+  .item{border:1px solid var(--border);border-radius:9px;padding:12px 14px;margin-bottom:10px;background:var(--card)}
+  .item-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+  .item-title{font-weight:600}
+  .item-meta{color:var(--muted-fg);font-size:12.5px}
+  .item ul{margin:8px 0 0;padding-left:18px;color:var(--fg)}
+  .item ul li{margin:2px 0}
+  .del{color:var(--muted-fg);cursor:pointer;font-size:12.5px}
+  .del:hover{color:#dc2626}
+  /* segmented toggle */
+  .seg{display:inline-flex;background:var(--muted);border:1px solid var(--border);border-radius:8px;padding:3px;gap:3px}
+  .seg button{border:none;background:transparent;color:var(--muted-fg);padding:5px 12px;border-radius:6px;
+    font-size:12.5px;font-weight:500;cursor:pointer;font-family:inherit}
+  .seg button.on{background:var(--card);color:var(--fg);box-shadow:var(--shadow)}
+  .switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px}
+  .track{width:38px;height:22px;border-radius:999px;background:var(--border);position:relative;transition:.15s}
+  .track::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+    background:#fff;transition:.15s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+  .switch.on .track{background:var(--accent)}
+  .switch.on .track::after{transform:translateX(16px)}
+  /* toolbar */
+  .toolbar{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:16px}
+  .toolbar .grp{display:flex;align-items:center;gap:8px}
+  .toolbar .glabel{font-size:12.5px;color:var(--muted-fg)}
+  /* output */
+  .output{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);min-height:120px;padding:0;overflow:hidden}
+  .out-status{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
+    padding:10px 16px;border-bottom:1px solid var(--border);background:var(--muted);font-size:12.5px}
+  .out-status .metrics{display:flex;gap:14px;color:var(--muted-fg)}
+  .out-status .metrics b{color:var(--fg);font-weight:600}
+  .out-body{padding:16px 18px}
+  .seg-block{margin-bottom:16px}
+  .seg-block:last-child{margin-bottom:0}
+  .seg-tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.02em;color:var(--accent);
+    background:var(--accent-soft);padding:2px 9px;border-radius:6px;margin-bottom:7px}
+  .seg-block p{margin:0;white-space:pre-wrap}
+  .banner{display:flex;align-items:center;gap:9px;padding:10px 14px;border-radius:9px;font-size:13px;margin-bottom:14px}
+  .banner.amber{background:var(--amber-soft);color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 30%,transparent)}
+  .banner.green{background:var(--green-soft);color:var(--green);border:1px solid color-mix(in srgb,var(--green) 25%,transparent)}
+  .hl{background:color-mix(in srgb,var(--amber) 20%,transparent);border-radius:4px;padding:0 3px}
+  .caret{display:inline-block;width:7px;height:15px;background:var(--accent);vertical-align:text-bottom;
+    margin-left:1px;animation:blink 1s steps(1) infinite;border-radius:1px}
+  @keyframes blink{50%{opacity:0}}
+  .steps{counter-reset:s;margin:6px 0 0;padding:0;list-style:none}
+  .steps li{position:relative;padding:6px 0 6px 34px;margin:0;border-bottom:1px dashed var(--border)}
+  .steps li:last-child{border-bottom:none}
+  .steps li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:6px;width:22px;height:22px;
+    border-radius:6px;background:var(--primary);color:var(--primary-fg);display:grid;place-items:center;
+    font-size:12px;font-weight:700}
+  .steps li b{color:var(--fg)}
+  /* toast */
+  #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;
+    background:var(--primary);color:var(--primary-fg);padding:10px 18px;border-radius:9px;font-size:13px;
+    box-shadow:0 8px 24px rgba(0,0,0,.2);transition:.25s;z-index:50;pointer-events:none}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .muted{color:var(--muted-fg)}
+  .flex-between{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .divider{height:1px;background:var(--border);margin:14px 0}
+  .icon-btn{border:1px solid var(--border);background:var(--card);width:32px;height:32px;border-radius:8px;
+    display:grid;place-items:center;cursor:pointer;color:var(--fg)}
+  .icon-btn:hover{background:var(--muted)}
+  /* 文件导入 dropzone */
+  .dz{border:1.5px dashed var(--border);border-radius:10px;padding:14px 16px;display:flex;align-items:center;
+    gap:12px;background:var(--muted);cursor:pointer;transition:.12s}
+  .dz:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .dz .ic{width:22px;height:22px;color:var(--accent);flex:none}
+  .dz small{color:var(--muted-fg)}
+  /* 模态框 */
+  .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:60;padding:20px}
+  .modal-mask.show{display:flex}
+  .modal{background:var(--card);border:1px solid var(--border);border-radius:14px;width:100%;max-width:540px;
+    box-shadow:0 20px 60px rgba(0,0,0,.3);max-height:86vh;overflow:auto}
+  .modal-h{padding:16px 20px;border-bottom:1px solid var(--border)}
+  .modal-h h3{margin:0;font-size:16px}
+  .modal-h p{margin:4px 0 0;color:var(--muted-fg);font-size:12.5px}
+  .modal-b{padding:12px 20px}
+  .modal-f{padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px}
+  .chg{display:flex;gap:11px;align-items:flex-start;padding:11px 12px;border:1px solid var(--border);border-radius:9px;margin-bottom:9px}
+  .chg input{margin-top:3px;width:16px;height:16px;accent-color:var(--accent)}
+  .chg .op{font-size:11px;font-weight:600;padding:1px 7px;border-radius:5px;margin-right:6px}
+  .op.add{background:var(--green-soft);color:var(--green)}
+  .op.upd{background:var(--accent-soft);color:var(--accent)}
+  .op.conf{background:var(--amber-soft);color:var(--amber)}
+  /* range 滑块 */
+  input[type=range]{-webkit-appearance:none;height:5px;border-radius:5px;background:var(--border);outline:none;width:130px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+    background:var(--accent);cursor:pointer;border:2px solid var(--card);box-shadow:0 0 0 1px var(--border)}
+  /* 悬浮辅助窗（无标题栏，整体可拖拽） */
+  #overlay{position:fixed;top:120px;right:40px;width:360px;z-index:55;display:none;cursor:move;
+    background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.35);
+    overflow:hidden;opacity:.95}
+  #overlay.show{display:block}
+  #overlay.drag{cursor:grabbing}
+  .ov-x{position:absolute;top:6px;right:8px;z-index:2;cursor:pointer;width:22px;height:22px;border-radius:6px;
+    display:grid;place-items:center;background:var(--muted);color:var(--muted-fg);font-size:15px;line-height:1;opacity:.7}
+  .ov-x:hover{opacity:1;color:var(--fg)}
+  .ov-body{padding:18px 15px 13px;max-height:320px;overflow:auto;font-size:13.5px;cursor:auto}
+  .ov-foot{padding:7px 12px;border-top:1px solid var(--border);font-size:11.5px;color:var(--muted-fg);
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .ov-foot .c{display:flex;align-items:center;gap:6px}
+  .ov-foot .ppbtn{cursor:pointer;border:1px solid var(--border);background:var(--card);border-radius:6px;
+    padding:1px 8px;font-size:12px;color:var(--fg)}
+  .ov-foot .ppbtn:hover{background:var(--muted)}
+  .tele{max-height:300px;overflow:auto}
+  @media(max-width:760px){.layout{grid-template-columns:1fr}aside{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">S</div>
+    SpeakWise <small>智能面试助手 · 交互预览原型</small>
+  </div>
+  <div class="header-right">
+    <span class="badge dot">Mock 数据 · 无需后端</span>
+    <button class="icon-btn" id="themeBtn" title="切换主题" aria-label="切换主题">
+      <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <div class="nav-sec">会话</div>
+    <div style="padding:0 11px 4px;display:flex;gap:6px;align-items:center">
+      <select id="sessSel" onchange="switchSession(this.value)" style="flex:1;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:7px;padding:5px 8px;font-size:12.5px;font-family:inherit"></select>
+      <button class="btn sm" style="padding:4px 8px;font-size:12px" onclick="newSession()" title="新建会话">+</button>
+    </div>
+    <div class="nav-sec">核心流程</div>
+    <nav>
+      <div class="nav-item active" data-page="conversation">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        对话
+      </div>
+      <div class="nav-item" data-page="profile">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>
+        个人知识库
+      </div>
+      <div class="nav-item" data-page="jd">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>
+        岗位上下文
+      </div>
+    </nav>
+    <div class="nav-sec">提示词管理</div>
+    <nav>
+      <div class="nav-item" data-page="prompts" style="font-size:13px">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        模板配置
+      </div>
+    </nav>
+    <div class="nav-sec">说明</div>
+    <div style="padding:4px 11px;font-size:12px;color:var(--muted-fg);line-height:1.7">
+      本页为交付形态预览，所有生成均为本地模拟（不调用真实模型）。用于确认界面与交互是否符合预期。
+    </div>
+  </aside>
+
+  <main>
+    <!-- ============ 个人知识库 ============ -->
+    <section class="page show" id="page-profile">
+      <h1 class="page-title">个人知识库</h1>
+      <p class="page-sub">录入并持久化你的多维度经历，供生成时调用。数据仅本地存储（Mock）。</p>
+
+      <div class="card">
+        <h3>📄 文档导入 / 附加</h3>
+        <p class="hint">支持 TXT / DOC / PDF · 解析入库前需你确认 · 也可仅作为素材附加 · 对应 FR-020~023</p>
+        <div class="dz" onclick="importDoc('parse')">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6M9 15h6"/></svg>
+          <div><b>导入简历文档并解析</b><br><small>解析后生成「更新建议」，逐项确认后写入知识库（不自动覆盖）</small></div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap">
+          <button class="btn sm" onclick="importDoc('attach')">+ 附加文档为素材</button>
+          <span class="muted" style="font-size:12px">已附加：</span>
+          <div class="chips" id="attachChips"><span class="muted" style="font-size:12px">（暂无）</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>基础信息</h3>
+        <p class="hint">对应实体 UserProfile</p>
+        <div class="row">
+          <div class="field"><label class="lbl">姓名</label><input type="text" value="张明"></div>
+          <div class="field"><label class="lbl">电话</label><input type="text" value="138****6021"></div>
+          <div class="field"><label class="lbl">邮箱</label><input type="email" value="zhangming@example.com"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="flex-between"><h3>实习经历</h3><button class="btn sm" onclick="addIntern()">+ 添加实习</button></div>
+        <p class="hint">须包含可量化成果 · 对应实体 Internship</p>
+        <div id="internList"></div>
+      </div>
+
+      <div class="card">
+        <div class="flex-between"><h3>科研 / 项目经历</h3><button class="btn sm" onclick="addProject()">+ 添加项目</button></div>
+        <p class="hint">须含 角色 / 技术栈 / 挑战 / 解决方案 / 结果 · 对应实体 Project</p>
+        <div id="projList"></div>
+      </div>
+
+      <div class="card">
+        <h3>技术栈</h3>
+        <p class="hint">按熟练度分级 · 对应实体 Skill</p>
+        <div class="chips" id="skillChips" style="margin-bottom:12px"></div>
+        <div class="row">
+          <div class="field" style="max-width:200px"><input type="text" id="skillName" placeholder="技能名，如 Redis"></div>
+          <div class="field" style="max-width:140px">
+            <select id="skillLevel"><option>了解</option><option selected>熟悉</option><option>精通</option></select>
+          </div>
+          <button class="btn sm" onclick="addSkill()" style="height:36px">添加</button>
+        </div>
+      </div>
+
+      <button class="btn primary" onclick="toast('已保存到本地知识库（Mock）')">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+        保存知识库
+      </button>
+    </section>
+
+    <!-- ============ 岗位上下文 ============ -->
+    <section class="page" id="page-jd">
+      <h1 class="page-title">岗位上下文</h1>
+      <p class="page-sub">粘贴岗位描述（JD）与公司介绍，系统提取核心技能 / 职责 / 价值观。</p>
+
+      <div class="card">
+        <h3>岗位描述</h3>
+        <p class="hint">对应接口 POST /api/jd/analyze</p>
+        <textarea id="jdText" rows="7">【后端开发工程师 - 交易平台】
+职责：负责核心交易链路的稳定性建设与性能优化；参与高并发系统架构设计；搭建监控与容量治理体系。
+要求：熟悉高并发/分布式系统；掌握限流、降级、缓存等治理手段；有大规模交易或订单系统经验优先。
+关于我们：我们相信「以用户价值为先」，用技术为亿级用户提供稳定可靠的服务。</textarea>
+        <div class="flex-between" style="margin-top:12px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn primary" id="jdBtn" onclick="analyzeJD()">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              解析岗位
+            </button>
+            <button class="btn" onclick="importJDDoc()">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              导入 JD 文档
+            </button>
+            <button class="btn" onclick="importDoc('attach','jd')">+ 附加素材（公司介绍等）</button>
+          </div>
+          <label class="switch" id="failSw" onclick="toggleSw(this)">
+            <span class="track"></span><span class="muted">模拟解析失败（降级演示）</span>
+          </label>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap">
+          <span class="muted" style="font-size:12px">已附加素材：</span>
+          <div class="chips" id="jdAttachChips"><span class="muted" style="font-size:12px">（暂无）</span></div>
+        </div>
+      </div>
+
+      <div class="card" id="jdResult" style="display:none">
+        <div class="flex-between" style="margin-bottom:10px">
+          <h3 style="margin:0">解析结果</h3>
+          <span class="chip green" id="jdStatus">✓ 解析成功</span>
+        </div>
+        <div id="jdParsed"></div>
+      </div>
+    </section>
+
+    <!-- ============ 对话（主界面）============ -->
+    <section class="page show" id="page-conversation">
+      <!-- 顶部控制栏 -->
+      <div style="display:flex;align-items:center;gap:10px;padding:0 0 12px;border-bottom:1px solid var(--border);margin-bottom:0;flex-wrap:wrap">
+        <span class="glabel" style="font-size:12px">JD</span>
+        <label class="switch on" id="jdSw" onclick="toggleSw(this)" style="font-size:12px"><span class="track"></span><span id="jdSwLabel">已解析</span></label>
+        <span class="glabel" style="font-size:12px;margin-left:6px">匹配度</span>
+        <div class="seg" id="matchSeg">
+          <button class="on" data-v="strong" onclick="pick('matchSeg',this)">强</button>
+          <button data-v="weak" onclick="pick('matchSeg',this)">弱</button>
+        </div>
+        <span class="glabel" style="font-size:12px;margin-left:6px">模板</span>
+        <select id="tmplSel" onchange="setActiveTemplate(this.value)" style="background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:7px;padding:4px 7px;font-size:12px;font-family:inherit;max-width:130px"></select>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <div class="seg" id="convDisp">
+            <button class="on" data-v="inline" onclick="setDisplayMode('inline')">面板</button>
+            <button data-v="floating" onclick="setDisplayMode('floating')">悬浮</button>
+          </div>
+          <div class="seg" id="convRate">
+            <button data-v="1" onclick="setStreamRate(1)">慢</button>
+            <button class="on" data-v="2" onclick="setStreamRate(2)">正常</button>
+            <button data-v="4" onclick="setStreamRate(4)">快</button>
+          </div>
+          <label class="switch on" id="convAuto" onclick="toggleAuto(this)" style="font-size:12px"><span class="track"></span><span>自动滚动</span></label>
+        </div>
+      </div>
+
+      <!-- 消息列表 -->
+      <div id="msgList" style="height:calc(100vh - 300px);overflow:auto;padding:14px 0" class="msg-area">
+        <div id="msgWelcome" style="text-align:center;padding:50px 20px;color:var(--muted-fg)">
+          <div style="font-size:40px;margin-bottom:14px">💬</div>
+          <div style="font-size:15px;font-weight:600;margin-bottom:6px">面试准备对话</div>
+          <div style="font-size:13px;line-height:2">
+            输入 <code style="background:var(--muted);padding:1px 6px;border-radius:4px;font-weight:600">/intro</code> 生成自我介绍<br>
+            输入 <code style="background:var(--muted);padding:1px 6px;border-radius:4px;font-weight:600">/scenario &lt;问题&gt;</code> 生成场景题回答<br>
+            输入 <code style="background:var(--muted);padding:1px 6px;border-radius:4px;font-weight:600">/followup</code> 让 AI 模拟面试官追问<br>
+            <span style="color:var(--muted-fg)">直接打字即可追问打磨</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 输入栏（斜杠命令 + 语音 + 发送） -->
+      <div style="border-top:1px solid var(--border);padding:10px 0 0;position:relative">
+        <div id="slashHint" style="display:none;position:absolute;bottom:52px;left:0;background:var(--card);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:6px;z-index:20;min-width:220px"></div>
+        <div style="display:flex;gap:9px;align-items:center">
+          <button class="btn sm" id="micBtn" title="语音输入（需配置扩展）" onclick="toggleMic()" style="padding:5px 8px;opacity:.4;cursor:not-allowed" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg>
+          </button>
+          <input type="text" id="chatInput" placeholder="输入 /intro、/scenario 问题、/followup 或直接打字追问…"
+            oninput="onInput()" onkeydown="onKey(event)" style="flex:1;padding:9px 12px;font-size:13.5px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-family:inherit;outline:none">
+          <button class="btn primary sm" onclick="sendMsg()" style="padding:8px 16px">发送</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 提示词管理 ============ -->
+    <section class="page" id="page-prompts">
+      <h1 class="page-title">提示词模板管理</h1>
+      <p class="page-sub">集中管理自我介绍与场景题的回答结构/风格规则。内置模板受保护（copy-on-edit）。对应 FR-035~039。</p>
+      <div id="tmplList"></div>
+      <button class="btn primary" onclick="newTemplate()" style="margin-top:12px">+ 新建模板</button>
+    </section>
+
+  </main>
+</div>
+
+<!-- 悬浮实时辅助窗（无标题栏，整体可拖拽） -->
+<div id="overlay">
+  <span class="ov-x" onclick="closeOverlay()" title="关闭">×</span>
+  <div class="ov-body" id="ovBody"></div>
+  <div class="ov-foot">
+    <span class="c">透明度 <input type="range" id="ovOpacity" min="35" max="100" value="95" oninput="setOpacity(this.value)"><b id="ovOpVal" style="width:34px">95%</b></span>
+    <button class="ppbtn" id="ovPause" onclick="toggleScrollPause()" title="暂停/恢复自动滚动">⏸ 滚动</button>
+    <span style="margin-left:auto">字数 <b id="ovLen">0</b></span>
+  </div>
+</div>
+
+<!-- 文档解析确认弹窗 -->
+<div class="modal-mask" id="impModal">
+  <div class="modal">
+    <div class="modal-h">
+      <h3>确认知识库更新</h3>
+      <p id="impSub">已从「张明-简历.pdf」解析出以下内容，请勾选要写入的项（未勾选不写入）。</p>
+    </div>
+    <div class="modal-b" id="impBody"></div>
+    <div class="modal-f">
+      <button class="btn" onclick="closeImp()">取消</button>
+      <button class="btn primary" onclick="applyImp()">确认写入所选</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ---------- 导航 ---------- */
+document.querySelectorAll('.nav-item').forEach(n=>{
+  n.onclick=()=>{
+    document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));
+    n.classList.add('active');
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('show'));
+    document.getElementById('page-'+n.dataset.page).classList.add('show');
+  };
+});
+/* ---------- 主题 ---------- */
+document.getElementById('themeBtn').onclick=()=>{
+  const h=document.documentElement;
+  h.dataset.theme = h.dataset.theme==='dark' ? 'light' : 'dark';
+};
+/* ---------- toast ---------- */
+let toastT;
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2000);}
+/* ---------- 通用控件 ---------- */
+function toggleSw(el){el.classList.toggle('on');}
+function pick(seg,btn){document.querySelectorAll('#'+seg+' button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');}
+function copyOut(id){const t=document.getElementById(id).innerText;navigator.clipboard?.writeText(t);toast('已复制到剪贴板');}
+
+/* ---------- 呈现方式 / 速率 / 自动滚动 / 悬浮窗 ---------- */
+let displayMode='inline', streamStep=2;
+const RATE_LABEL={1:'慢',2:'正常',4:'快'};
+function setDisplayMode(m){
+  displayMode=m;
+  const seg=document.getElementById('convDisp');if(seg)
+    seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v===m));
+  if(m==='inline') closeOverlay();
+  toast(m==='floating'?'已切换为悬浮窗呈现（无标题栏，可整体拖拽）':'已切换为默认面板呈现');
+}
+function setStreamRate(v){
+  streamStep=+v;
+  const seg=document.getElementById('convRate');if(seg)
+    seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on',+b.dataset.v===+v));
+  toast('流式速率：'+(RATE_LABEL[v]||'正常')+'（下次生成生效）');
+}
+/* 自动滚动（提词器） */
+let autoScroll=true, scrollPaused=false, scrollTarget=null, scrollRAF=0;
+function toggleAuto(el){el.classList.toggle('on');autoScroll=el.classList.contains('on');
+  document.getElementById('convAuto').classList.toggle('on',autoScroll);
+  toast(autoScroll?'已开启自动滚动（提词器）':'已关闭自动滚动');}
+function toggleScrollPause(){scrollPaused=!scrollPaused;
+  document.getElementById('ovPause').textContent=(scrollPaused?'▶':'⏸')+' 滚动';}
+function beginAutoScroll(container){
+  scrollTarget=container;scrollPaused=false;
+  document.getElementById('ovPause').textContent='⏸ 滚动';
+  if(scrollRAF) cancelAnimationFrame(scrollRAF);
+  const step=()=>{
+    const el=scrollTarget;
+    if(el && autoScroll && !scrollPaused && el.scrollHeight>el.clientHeight+1
+       && el.scrollTop+el.clientHeight < el.scrollHeight-1){ el.scrollTop+=0.5; }
+    scrollRAF=requestAnimationFrame(step);
+  };
+  scrollRAF=requestAnimationFrame(step);
+}
+function openOverlay(){
+  const ov=document.getElementById('overlay');
+  document.getElementById('ovBody').innerHTML='';
+  document.getElementById('ovLen').textContent='0';
+  ov.classList.add('show');
+  setOpacity(document.getElementById('ovOpacity').value);
+  return document.getElementById('ovBody');
+}
+function closeOverlay(){document.getElementById('overlay').classList.remove('show');scrollTarget=null;}
+function setOpacity(v){v=Math.max(35,+v);document.getElementById('overlay').style.opacity=v/100;
+  document.getElementById('ovOpVal').textContent=v+'%';}
+/* 悬浮窗整体拖拽（避开控件） */
+(function(){
+  const ov=document.getElementById('overlay');
+  let sx,sy,ox,oy,drag=false;
+  ov.addEventListener('mousedown',e=>{
+    if(e.target.closest('input,button,.ov-x')) return;   // 控件上不触发拖拽
+    drag=true;ov.classList.add('drag');
+    const r=ov.getBoundingClientRect();ox=r.left;oy=r.top;sx=e.clientX;sy=e.clientY;
+    ov.style.right='auto';ov.style.left=ox+'px';ov.style.top=oy+'px';e.preventDefault();});
+  window.addEventListener('mousemove',e=>{if(!drag)return;
+    ov.style.left=(ox+e.clientX-sx)+'px';ov.style.top=Math.max(0,oy+e.clientY-sy)+'px';});
+  window.addEventListener('mouseup',()=>{drag=false;ov.classList.remove('drag');});
+})();
+
+/* ---------- 文档导入（Mock） ---------- */
+const attached={profile:[],jd:[]};
+function renderAttached(){
+  [['profile','attachChips'],['jd','jdAttachChips']].forEach(([sc,id])=>{
+    const el=document.getElementById(id);if(!el)return;
+    el.innerHTML=attached[sc].length
+      ?attached[sc].map((f,i)=>`<span class="chip">📎 ${f}<span class="x" onclick="attached['${sc}'].splice(${i},1);renderAttached()">×</span></span>`).join('')
+      :'<span class="muted" style="font-size:12px">（暂无）</span>';
+  });
+}
+function importDoc(usage,scope){
+  scope=scope||'profile';
+  if(usage==='attach'){
+    const nm=(scope==='jd'?'公司介绍-':'个人材料-')+(attached[scope].length+1)+'.pdf';
+    attached[scope].push(nm);renderAttached();
+    toast('已附加为'+(scope==='jd'?'岗位上下文':'知识库')+'素材，将在生成时纳入参考');return;
+  }
+  openImp();
+}
+function importJDDoc(){
+  document.getElementById('jdText').value='【算法工程师 - 推荐方向】\n职责：负责信息流推荐算法的设计与迭代，提升点击率与时长；参与召回/排序模型优化。\n要求：熟悉推荐系统与机器学习；有大规模数据处理经验优先。\n关于我们：以用户价值为先，用算法连接亿级用户与优质内容。';
+  toast('已从文档载入 JD 文本，请点击「解析岗位」');
+}
+/* 解析确认弹窗 */
+const proposals=[
+  {op:'add',cls:'add',target:'实习经历',text:'腾讯 · 后端开发实习（2023.07–2023.12）：参与 IM 消息存储优化，写入延迟下降 40%',def:true,
+    apply:()=>interns.push({c:'腾讯',p:'后端开发实习生',d:'2023.07 – 2023.12',a:['参与 IM 消息存储优化，写入延迟下降 40%']})},
+  {op:'add',cls:'add',target:'技能',text:'新增技能：Kubernetes（熟悉）',def:true,
+    apply:()=>skills.push({n:'Kubernetes',l:'熟悉'})},
+  {op:'冲突',cls:'conf',target:'技能',text:'与现有冲突：Redis 熟练度「熟悉」→「精通」（需你决定是否覆盖）',def:false,
+    apply:()=>{const s=skills.find(x=>x.n==='Redis');if(s)s.l='精通';}}
+];
+function openImp(){
+  document.getElementById('impBody').innerHTML=proposals.map((p,i)=>`
+    <label class="chg"><input type="checkbox" data-i="${i}" ${p.def?'checked':''}>
+      <span><span class="op ${p.cls}">${p.op==='add'?'新增':p.op==='冲突'?'冲突':'更新'}</span>
+      <b>${p.target}</b><br><span class="muted" style="font-size:12.5px">${p.text}</span></span></label>`).join('');
+  document.getElementById('impModal').classList.add('show');
+}
+function closeImp(){document.getElementById('impModal').classList.remove('show');}
+function applyImp(){
+  let n=0;
+  document.querySelectorAll('#impBody input:checked').forEach(c=>{proposals[+c.dataset.i].apply();n++;});
+  renderInterns();renderProjects();renderSkills();closeImp();
+  toast(n?`已写入所选 ${n} 项到知识库（未勾选项未写入）`:'未选择任何项，知识库未改动');
+}
+
+/* ---------- 知识库 Mock 数据 ---------- */
+const interns=[{c:'字节跳动',p:'后端开发实习生',d:'2024.06 – 2024.12',a:['主导高并发订单系统稳定性改造，峰值 QPS 从 8k 提升至 3.5w','引入分级限流与异步削峰，接口超时率下降 92%']}];
+const projects=[{n:'高并发订单系统稳定性改造',r:'核心开发 / 项目负责人',t:['Go','Redis','Kafka','Prometheus'],ch:'大促期间订单链路频繁超时、故障定位慢',so:'分级限流+异步削峰+全链路监控',re:'超时率下降 92%，故障定位从小时级压缩到 5 分钟内'}];
+const skills=[{n:'Go',l:'精通'},{n:'高并发系统设计',l:'精通'},{n:'Redis',l:'熟悉'},{n:'Kafka',l:'熟悉'},{n:'Prometheus',l:'熟悉'},{n:'推荐算法',l:'了解'}];
+
+function renderInterns(){document.getElementById('internList').innerHTML=interns.map((x,i)=>`
+  <div class="item"><div class="item-head">
+    <div><div class="item-title">${x.p} · ${x.c}</div><div class="item-meta">${x.d}</div></div>
+    <span class="del" onclick="interns.splice(${i},1);renderInterns()">删除</span></div>
+    <ul>${x.a.map(a=>`<li>${a}</li>`).join('')}</ul></div>`).join('') || '<div class="muted">暂无，点击右上角添加。</div>';}
+function renderProjects(){document.getElementById('projList').innerHTML=projects.map((x,i)=>`
+  <div class="item"><div class="item-head">
+    <div><div class="item-title">${x.n}</div><div class="item-meta">角色：${x.r}</div></div>
+    <span class="del" onclick="projects.splice(${i},1);renderProjects()">删除</span></div>
+    <div class="chips" style="margin:8px 0">${x.t.map(t=>`<span class="chip">${t}</span>`).join('')}</div>
+    <ul><li><b>挑战：</b>${x.ch}</li><li><b>方案：</b>${x.so}</li><li><b>结果：</b>${x.re}</li></ul></div>`).join('') || '<div class="muted">暂无。</div>';}
+function renderSkills(){document.getElementById('skillChips').innerHTML=skills.map((s,i)=>`
+  <span class="chip">${s.n}<span class="muted" style="font-size:11px">·${s.l}</span><span class="x" onclick="skills.splice(${i},1);renderSkills()">×</span></span>`).join('');}
+function addIntern(){interns.push({c:'新公司',p:'实习岗位',d:'2025.01 – 2025.06',a:['在此填写可量化成果']});renderInterns();toast('已添加一段实习');}
+function addProject(){projects.push({n:'新项目',r:'开发',t:['技术栈'],ch:'挑战',so:'解决方案',re:'结果'});renderProjects();toast('已添加一个项目');}
+function addSkill(){const n=document.getElementById('skillName').value.trim();if(!n)return;skills.push({n,l:document.getElementById('skillLevel').value});document.getElementById('skillName').value='';renderSkills();}
+renderInterns();renderProjects();renderSkills();renderAttached();renderSessions();renderTemplates();
+
+/* ---------- 会话管理 ---------- */
+let activeSid, sessions=[{id:'s1',name:'默认面试准备',msgs:[],createdAt:Date.now()}];
+function ensureSession(){if(!activeSid||!sessions.find(s=>s.id===activeSid)){activeSid=sessions[0]?.id;}}
+function renderSessions(){
+  ensureSession();
+  const sel=document.getElementById('sessSel');
+  sel.innerHTML=sessions.map(s=>`<option value="${s.id}" ${s.id===activeSid?'selected':''}>${s.name}</option>`).join('');
+  sel.onchange=function(){switchSession(this.value);};
+}
+function switchSession(id){
+  activeSid=id;renderSessions();
+  const sess=sessions.find(s=>s.id===id);if(!sess)return;
+  toast('已切换到：'+sess.name);
+  // 把消息渲染到各个输出区（这里主要靠对话流显示）
+}
+function newSession(){
+  const n='会话'+(sessions.length+1);
+  const s={id:'s'+Date.now(),name:n,msgs:[],createdAt:Date.now()};
+  sessions.unshift(s);activeSid=s.id;renderSessions();toast('已创建：'+n);
+}
+/* ---------- 对话引擎：斜杠命令 + 消息流 ---------- */
+function sendMsg(){
+  const inp=document.getElementById('chatInput'),txt=inp.value.trim();if(!txt)return;
+  inp.value='';hideSlash();
+  ensureSession();const s=sessions.find(x=>x.id===activeSid);if(!s)return;
+  // 解析斜杠命令
+  const m=txt.match(/^\/(intro|scenario|followup)\s*(.*)/i);
+  if(m){
+    const cmd=m[1].toLowerCase(),arg=m[2].trim();
+    s.msgs.push({role:'user',command:'/'+cmd,content:txt,type:'system',ts:Date.now()});
+    addUserBubble(txt);
+    if(cmd==='intro') cmdIntro(arg);
+    else if(cmd==='scenario') arg?cmdScenario(arg):addAssistBubble('⚠ 请提供问题：`/scenario <问题>`');
+    else if(cmd==='followup') cmdFollowup();
+  }else{
+    // 普通追问
+    s.msgs.push({role:'user',content:txt,type:'free_text',ts:Date.now()});
+    addUserBubble(txt);
+    setTimeout(()=>{
+      const reply='好的，我理解你想进一步了解。基于你的经历——高并发订单系统改造中，关键的权衡是分级限流按业务优先级划分三级流量（核心交易 > 实时查询 > 异步批处理），核心链路始终保有余量。'+
+        '\n\n想让我换其他角度（更偏工程落地、更偏技术决策、或更偏团队协作），随时告诉我。';
+      s.msgs.push({role:'assistant',content:reply,type:'follow_up',ts:Date.now()});
+      addAssistBubble(reply);
+    },1000+Math.random()*800);
+  }
+}
+
+function onInput(){
+  const v=document.getElementById('chatInput').value;
+  if(v==='/'||v.endsWith(' /')){
+    showSlash(['/intro [要求] — 生成三段式自我介绍','/scenario <问题> — 生成STAR场景题回答','/followup — AI模拟面试官追问']);
+  }else if(!v.startsWith('/')){hideSlash();}
+}
+function onKey(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}
+  if(e.key==='Escape')hideSlash();
+}
+function showSlash(items){
+  const h=document.getElementById('slashHint');
+  h.innerHTML=items.map(i=>`<div style="padding:7px 10px;border-radius:6px;cursor:pointer;font-size:13px" onmousedown="fillSlash(this)" data-cmd="${i.split(' ')[0]}">${i}</div>`).join('');
+  h.style.display='block';
+}
+function hideSlash(){document.getElementById('slashHint').style.display='none';}
+function fillSlash(el){
+  const cmd=el.dataset.cmd, inp=document.getElementById('chatInput');
+  inp.value=cmd+' ';inp.focus();hideSlash();
+}
+
+/* 消息渲染 */
+function addUserBubble(txt){
+  const el=document.getElementById('msgList'),w=document.getElementById('msgWelcome');if(w)w.style.display='none';
+  el.insertAdjacentHTML('beforeend',`<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><div style="max-width:80%;background:var(--primary);color:var(--primary-fg);padding:10px 14px;border-radius:12px 12px 0 12px;font-size:13.5px;white-space:pre-wrap">${esc(txt)}</div></div>`);
+  el.scrollTop=el.scrollHeight;
+}
+function addAssistBubble(html){
+  const el=document.getElementById('msgList'),w=document.getElementById('msgWelcome');if(w)w.style.display='none';
+  const id='b'+Date.now();
+  el.insertAdjacentHTML('beforeend',`<div style="margin-bottom:14px"><div id="${id}" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-width:92%;font-size:13.5px;line-height:1.7;white-space:pre-wrap">${html}</div><div style="margin-top:4px;font-size:11px;color:var(--muted-fg);display:flex;gap:10px"><span class="copy-hint" style="cursor:pointer" onclick="copyBubble('${id}')">复制</span></div></div>`);
+  el.scrollTop=el.scrollHeight;
+  if(autoScroll) beginAutoScroll(el);
+}
+function copyBubble(id){const t=document.getElementById(id).innerText;navigator.clipboard?.writeText(t);toast('已复制');}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+/* 斜杠命令：/intro [要求] */
+function cmdIntro(requirement){
+  const weak=document.querySelector('#matchSeg button.on')?.dataset.v==='weak';
+  const useJD=document.getElementById('jdSw').classList.contains('on');
+  const generic=!useJD||window.__jdOK===false;
+  const floating=displayMode==='floating';
+  const extra=requirement?'（要求：'+requirement+'）':'';
+  let body,id='intro'+Date.now();
+  if(floating){body=openOverlay();}else{body=document.getElementById('msgList');}
+  const segs=generic?[
+    {label:'概述',text:'面试官您好，我是张明，计算机科学与技术专业。过去两年聚焦后端服务与稳定性方向，在字节跳动完成核心业务实习，主导过高并发订单系统改造。'},
+    {label:'能力总结',text:'三点核心能力：高并发系统设计、全链路可观测性建设、扎实的工程规范——均有具体落地与量化结果。'+extra},
+    {label:'收尾',text:'喜欢从底层逻辑入手快速补齐短板，期待把稳定性方法论带到更大业务场景中。'}
+  ]:weak?[
+    {label:'概述',text:'面试官您好，我是张明，后端与稳定性方向。在字节跳动完成过实习，主导高并发订单系统稳定性改造。'},
+    {label:'能力总结（弱匹配·角度切换）',text:'坦白说，在实际工作中还没有大规模落地过推荐算法；<span class="hl">但在个人项目中从零实现了协同过滤推荐原型</span>，并研究了贵司信息流分发的典型场景。<span class="hl">习惯从底层逻辑快速补齐</span>——每进入新领域都能快速产出。'+extra},
+    {label:'业务匹配',text:'注意到贵岗位重视持续学习与快速上手，这正是我最自信的部分；愿意用最短时间补齐算法工程化实践缺口。'}
+  ]:[
+    {label:'概述',text:'面试官您好，我是张明，计算机科学与技术专业。过去两年聚焦后端与数据平台，在字节跳动完成核心业务实习，主导高并发订单系统稳定性改造。'+extra},
+    {label:'能力总结（附证据）',text:'三点能力：高并发系统设计——订单系统改造中，分级限流与异步削峰把峰值QPS从8k提升到3.5w、超时率下降92%；可观测性建设——全链路监控把故障定位压到5分钟内；工程规范——主导团队落地了契约测试与灰度发布。'},
+    {label:'业务匹配',text:'注意到贵岗位需处理大规模交易链路稳定性与成本问题，我在高并发治理与监控体系上的积累恰好直接支撑；也认同贵司「以用户价值为先」的理念。'}
+  ];
+  if(!floating){
+    addAssistBubble('<span class="chip accent" style="font-size:11px;margin-bottom:8px">自我介绍 · 三段式</span>'+generic?'<div class="banner amber" style="margin-top:8px">⚠ 通用模式（降级）</div>':'');
+  }
+  streamToBubble(floating?body:document.querySelector('#msgList div[id]:last-of-type'),segs,()=>{
+    const full=segs.map(s=>s.text).join('');const n=countZh(full);
+    if(floating)document.getElementById('ovLen').textContent=n;
+  });
+}
+
+/* 斜杠命令：/scenario <问题> */
+function cmdScenario(question){
+  const floating=displayMode==='floating',opt=/优化|提升|改进|效率/.test(question);
+  let body;
+  if(floating){body=openOverlay();}else{addAssistBubble('<span class="chip accent" style="font-size:11px">STAR · '+(opt?'进取':'沉稳')+'</span>');body=document.querySelector('#msgList div[id]:last-of-type');}
+  const segs=[
+    {label:'情境/任务',text:'先说结论：线上崩溃第一优先级永远是「止损」，先把用户可用性抢回来。'},
+    {label:'行动（分步骤）',text:'1. 止损：立即回滚到上一稳定版本或切流到备用集群，先恢复服务。\n2. 排查：拉起应急群，结合全链路监控与错误日志定位根因（高并发订单系统中靠这套监控把定位时间压到5分钟内）。\n3. 修复：小流量灰度验证修复方案，确认无副作用后逐步全量。\n4. 复盘：产出事故报告，把教训沉淀为告警规则与应急预案，避免同类问题复发。'},
+    {label:'结果',text:'通过「先止损、再定位、灰度修复、闭环复盘」流程，既把故障影响降到最低，也把一次事故转化为系统稳定性的长期提升。\n\n🔗 来源经历：高并发订单系统稳定性改造（回答步骤均锚定真实项目）'}
+  ];
+  streamToBubble(body,segs,()=>{if(floating)document.getElementById('ovLen').textContent=countZh(segs.map(s=>s.text).join(''));});
+}
+
+/* /followup */
+function cmdFollowup(){
+  const qs=['你提到的高并发系统改造中，最大的技术难点是什么？','如果让你重新做一次，你会怎么优化架构？','你如何衡量稳定性改造的ROI？'];
+  const q=qs[Math.floor(Math.random()*qs.length)];
+  ensureSession();const s=sessions.find(x=>x.id===activeSid);
+  s.msgs.push({role:'assistant',content:q,type:'follow_up',ts:Date.now()});
+  addAssistBubble('🤔 <b>模拟面试官追问：</b>'+q);
+}
+
+/* 流式渲染到消息气泡 */
+function streamToBubble(container,segments,onDone){
+  const t0=performance.now();let si=0,totalLen=0,firstFired=false;
+  if(container.tagName!=='DIV'||!container.querySelector)return;
+  // 查找或创建内容区
+  let content=container.querySelector('.seg-content');
+  if(!content){content=document.createElement('div');content.className='seg-content';container.appendChild(content);}
+  content.innerHTML='';
+  function nextSeg(){
+    if(si>=segments.length){onDone&&onDone();return;}
+    const s=segments[si];
+    const block=document.createElement('div');block.className='seg-block';
+    if(s.label)block.innerHTML='<span class="seg-tag">'+s.label+'</span>';
+    const p=document.createElement('p');block.appendChild(p);content.appendChild(block);
+    const caret=document.createElement('span');caret.className='caret';p.appendChild(caret);
+    let i=0,plain=s.text||'';
+    const tk=setInterval(()=>{
+      if(!firstFired){firstFired=true;}
+      i+=streamStep;p.textContent=plain.slice(0,i);p.appendChild(caret);
+      container.scrollIntoView({block:'end',behavior:'smooth'});
+      const el=document.getElementById('msgList');if(el)el.scrollTop=el.scrollHeight;
+      if(i>=plain.length){clearInterval(tk);p.textContent=plain;totalLen+=plain.length;si++;setTimeout(nextSeg,180);}
+    },16);
+  }
+  nextSeg();
+}
+
+/* ---------- 提示词模板 ---------- */
+const builtInTemplates=[
+  {id:'bt1',scope:'self_intro',name:'默认自我介绍三段式',isBuiltin:true,
+   structure:'{"sections":["概述","技能+证据","业务匹配"],"length":"300-400"}',
+   style:'{"tone":"专业自然","fallback_angle":"学习角度"}'},
+  {id:'bt2',scope:'scenario',name:'默认 STAR 分步骤',isBuiltin:true,
+   structure:'{"framework":"STAR","step_min":3,"step_labels":["止损","排查","修复","复盘"]}',
+   style:'{"tone":"沉稳克制","adapt_tone":true}'},
+  {id:'ut1',scope:'self_intro',name:'自定义-简洁快讲版',isBuiltin:false,
+   structure:'{"sections":["核心亮点一句话","3个关键数据"],"length":"150-200"}',
+   style:'{"tone":"干脆利落"}'}
+], activeTid='bt1';
+let customTmpls=[];
+function allTemplates(){return [...builtInTemplates,...customTmpls];}
+function renderTemplates(){
+  document.getElementById('tmplSel').innerHTML=allTemplates().map(t=>
+    `<option value="${t.id}" ${t.id===activeTid?'selected':''}>${t.name}${t.scope==='self_intro'?' (自我介绍)':' (场景题)'}</option>`).join('');
+  // 渲染管理面板
+  const list=document.getElementById('tmplList');if(!list)return;
+  list.innerHTML=allTemplates().map((t,i)=>{
+    const orig=builtInTemplates.find(b=>b.id===t.id);
+    const isBuiltin=!!orig;
+    return `<div class="card" style="margin-bottom:10px"><div class="flex-between">
+      <div><b>${t.name}</b> <span class="chip ${t.scope==='self_intro'?'accent':'green'}">${t.scope==='self_intro'?'自我介绍':'场景题'}</span>
+      ${isBuiltin?'<span class="chip" style="font-size:11px">内置 · 受保护</span>':''}</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn sm" onclick="editTemplate(\x27${t.id}\x27)">${isBuiltin?'复制并编辑':'编辑'}</button>
+        ${isBuiltin?'':'<button class="btn sm del" style="color:#dc2626" onclick="deleteTemplate(\x27${t.id}\x27)">删除</button>'}
+      </div></div>
+      <div class="row" style="margin-top:8px"><div class="field"><label class="lbl">结构规则</label><code style="font-size:11px">${t.structure}</code></div>
+      <div class="field"><label class="lbl">风格规则</label><code style="font-size:11px">${t.style}</code></div></div></div>`;
+  }).join('');
+}
+function setActiveTemplate(id){activeTid=id;renderTemplates();
+  const t=allTemplates().find(x=>x.id===id);toast('已切换模板：'+(t?t.name:id));}
+function newTemplate(){
+  const nm='自定义模板'+(customTmpls.length+1);
+  customTmpls.push({id:'ct'+Date.now(),scope:'self_intro',name:nm,isBuiltin:false,
+    structure:'{"sections":[""]}','style':'{"tone":""}'});renderTemplates();toast('已创建：'+nm);}
+function editTemplate(id){
+  const orig=builtInTemplates.find(b=>b.id===id);
+  if(orig){ // copy-on-edit
+    const n={...orig,id:'ct'+Date.now(),name:orig.name+' (副本)',isBuiltin:false};
+    customTmpls.push(n);renderTemplates();toast('内置模板已生成副本，请编辑：'+n.name);return;
+  }
+  const ct=customTmpls.find(c=>c.id===id);
+  if(ct){const ns=prompt('名称',ct.name);if(ns){ct.name=ns;renderTemplates();activeTid=ct.id;renderTemplates();}}
+}
+function deleteTemplate(id){customTmpls=customTmpls.filter(c=>c.id!==id);renderTemplates();toast('已删除模板');}
+function toggleMic(){toast('语音扩展未配置（FR-033/034）。请在设置中注册 VoiceAdapter 后启用。');}
+
+renderTemplates();
+
+/* ---------- JD 解析 ---------- */
+function analyzeJD(){
+  const fail=document.getElementById('failSw').classList.contains('on');
+  const btn=document.getElementById('jdBtn');btn.disabled=true;btn.textContent='解析中…';
+  setTimeout(()=>{
+    btn.disabled=false;btn.innerHTML='<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg> 解析岗位';
+    document.getElementById('jdResult').style.display='block';
+    const st=document.getElementById('jdStatus');
+    if(fail){
+      st.className='chip';st.style.color='var(--amber)';st.textContent='⚠ 解析失败 → 将降级为通用模式';
+      document.getElementById('jdParsed').innerHTML='<div class="banner amber">未能从文本中提取结构化岗位信息。生成自我介绍时将自动进入「通用面试模式」，仅基于个人经历。</div>';
+      window.__jdOK=false;
+    }else{
+      st.className='chip green';st.style.color='';st.textContent='✓ 解析成功';
+      document.getElementById('jdParsed').innerHTML=`
+        <div style="margin-bottom:12px"><div class="lbl">核心技能要求</div><div class="chips">
+          ${['高并发/分布式系统','限流·降级·缓存治理','大规模交易/订单经验'].map(x=>`<span class="chip accent">${x}</span>`).join('')}</div></div>
+        <div style="margin-bottom:12px"><div class="lbl">主要岗位职责</div><div class="chips">
+          ${['交易链路稳定性建设','高并发架构设计','监控与容量治理'].map(x=>`<span class="chip">${x}</span>`).join('')}</div></div>
+        <div><div class="lbl">公司价值观 / 方向</div><div class="chips">
+          ${['以用户价值为先','亿级用户稳定服务'].map(x=>`<span class="chip">${x}</span>`).join('')}</div></div>`;
+      window.__jdOK=true;
+    }
+    toast(fail?'解析失败（模拟）':'岗位解析完成');
+  },900);
+}
+
+
+function countZh(t){return (t.match(/[一-龥]/g)||[]).length + (t.match(/[a-zA-Z0-9]+/g)||[]).length;}
+
+</script>
+</body>
+</html>

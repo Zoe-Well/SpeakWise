@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── 全局焦点指示器（仅键盘聚焦，不冲突 Tailwind focus:ring）── */
+button:focus-visible:not([class*="focus:"]),
+input:focus-visible:not([class*="focus:"]),
+select:focus-visible:not([class*="focus:"]),
+textarea:focus-visible:not([class*="focus:"]),
+[role="button"]:focus-visible:not([class*="focus:"]) {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+/* ── 减弱动画偏好 ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── 淡入动画 ── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SpeakWise Copilot</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100vh; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: transparent;
+    color: #fff;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── Layout: 3 zones ── */
+  #app {
+    display: flex; flex-direction: column; height: 100vh;
+  }
+
+  /* Zone 1: Drag handle (always slightly visible, ~12px) */
+  #drag-handle {
+    height: 12px;
+    pointer-events: auto;
+    cursor: grab;
+    background: rgba(99,102,241,0.3);
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  #drag-handle:hover { background: rgba(99,102,241,0.6); }
+
+  /* Zone 2: Controls bar (hidden by default, shows on hover of handle or bar itself) */
+  #controls-wrapper {
+    pointer-events: auto;
+    flex-shrink: 0;
+  }
+  #controls {
+    padding: 6px 12px;
+    background: rgba(0,0,0,0.65);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    opacity: 0; transition: opacity 0.2s;
+  }
+  #controls-wrapper:hover #controls,
+  #drag-handle:hover + #controls-wrapper #controls,
+  #controls.visible { opacity: 1; }
+
+  #controls button {
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.25);
+    color: #fff; padding: 3px 8px; border-radius: 5px;
+    cursor: pointer; font-size: 11px; white-space: nowrap;
+  }
+  #controls button:hover { background: rgba(255,255,255,0.3); }
+  #controls button.active { background: #6366f1; border-color: #6366f1; }
+  #controls button.danger { background: rgba(239,68,68,0.5); }
+  #controls input[type="range"] { width: 50px; accent-color: #6366f1; }
+  #controls select { background: rgba(255,255,255,0.15); color: #fff; border: 1px solid rgba(255,255,255,0.25); border-radius: 5px; padding: 2px 4px; font-size: 11px; }
+  #controls select option { background: #333; }
+
+  /* Zone 3: Content area (click-through) */
+  #teleprompter {
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    padding: 16px 28px 24px;
+    pointer-events: none; /* ← click-through! */
+  }
+  #teleprompter::-webkit-scrollbar { width: 4px; }
+  #teleprompter::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 2px; }
+
+  #content {
+    font-size: 18px; line-height: 1.8;
+    white-space: pre-wrap; word-break: break-word;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.85);
+  }
+
+  #empty-state {
+    display: flex; align-items: center; justify-content: center;
+    height: calc(100vh - 48px); color: rgba(255,255,255,0.35);
+    font-size: 14px; text-align: center;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Zone 1: Drag handle -->
+  <div id="drag-handle" title="拖拽移动 · 悬停显示控制栏"></div>
+
+  <!-- Zone 2: Controls -->
+  <div id="controls-wrapper">
+    <div id="controls">
+      <button id="btn-play" onclick="toggleAutoScroll()">▶</button>
+      <button onclick="changeSpeed(-0.5)">−</button>
+      <span id="speed-label" style="font-size:11px;min-width:22px;text-align:center">1x</span>
+      <button onclick="changeSpeed(0.5)">+</button>
+
+      <span style="font-size:11px;opacity:0.6">|</span>
+      <span style="font-size:10px;opacity:0.6">字号</span>
+      <button onclick="changeFont(-1)">A−</button>
+      <button onclick="changeFont(1)">A+</button>
+
+      <span style="font-size:11px;opacity:0.6">|</span>
+      <span style="font-size:10px;opacity:0.6">透明</span>
+      <input type="range" id="opacity-slider" min="35" max="100" value="90" oninput="updateOpacity(this.value)">
+
+      <span style="flex:1"></span>
+      <button onclick="window.closeOverlay?.()" class="danger" title="关闭">✕</button>
+    </div>
+  </div>
+
+  <!-- Zone 3: Content (click-through) -->
+  <div id="teleprompter">
+    <div id="empty-state">等待面试内容…<br><small style="font-size:11px;opacity:0.5">在主窗口中生成回答后自动同步</small></div>
+    <div id="content" style="display:none"></div>
+  </div>
+
+</div>
+
+<script>
+  // ── State ──
+  let autoScroll = true;
+  let scrollSpeed = 1.0;
+  let fontSize = 18;
+  let scrollInterval = null;
+  let currentContent = "";
+  let pinnedVisible = false;
+
+  const contentEl = document.getElementById("content");
+  const emptyEl = document.getElementById("empty-state");
+  const tp = document.getElementById("teleprompter");
+  const btnPlay = document.getElementById("btn-play");
+  const speedLabel = document.getElementById("speed-label");
+  const opacitySlider = document.getElementById("opacity-slider");
+  const controlsDiv = document.getElementById("controls");
+
+  // ── Content ──
+  function setContent(text) {
+    currentContent = text || "";
+    if (currentContent) {
+      emptyEl.style.display = "none";
+      contentEl.style.display = "block";
+      contentEl.textContent = currentContent;
+    } else {
+      emptyEl.style.display = "flex";
+      contentEl.style.display = "none";
+    }
+  }
+
+  // ── Scroll ──
+  function startScroll() { stopScroll(); if (!autoScroll || !currentContent) return;
+    scrollInterval = setInterval(() => {
+      if (tp.scrollTop >= contentEl.scrollHeight - tp.clientHeight) { stopScroll(); btnPlay.textContent = "▶"; return; }
+      tp.scrollTop += 0.5 * scrollSpeed;
+    }, 30);
+  }
+  function stopScroll() { if (scrollInterval) { clearInterval(scrollInterval); scrollInterval = null; } }
+  function toggleAutoScroll() {
+    if (scrollInterval) { stopScroll(); btnPlay.textContent = "▶"; btnPlay.classList.remove("active"); }
+    else { if (tp.scrollTop >= contentEl.scrollHeight - tp.clientHeight) tp.scrollTop = 0; startScroll(); btnPlay.textContent = "⏸"; btnPlay.classList.add("active"); }
+  }
+  function resetScroll() { tp.scrollTop = 0; }
+
+  // ── Drag via handle ──
+  const handle = document.getElementById("drag-handle");
+  let dragging = false, sx = 0, sy = 0;
+  handle.addEventListener("mousedown", (e) => { dragging = true; sx = e.screenX; sy = e.screenY; });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const dx = e.screenX - sx, dy = e.screenY - sy;
+    sx = e.screenX; sy = e.screenY;
+    if (window.overlayAPI?.moveBy) window.overlayAPI.moveBy(dx, dy);
+  });
+
+  // ── Pin controls visibility ──
+  handle.addEventListener("dblclick", () => {
+    pinnedVisible = !pinnedVisible;
+    controlsDiv.classList.toggle("visible", pinnedVisible);
+  });
+
+  // ── Keyboard: Space to toggle scroll ──
+  window.addEventListener("keydown", (e) => {
+    if (e.key === " ") { e.preventDefault(); toggleAutoScroll(); }
+    if (e.key === "Escape" && window.overlayAPI?.closeOverlay) window.overlayAPI.closeOverlay();
+  });
+
+  // ── Settings persistence ──
+  async function loadSettings() {
+    if (!window.overlayAPI?.loadSettings) return;
+    const s = await window.overlayAPI.loadSettings();
+    if (s.scrollSpeed) { scrollSpeed = s.scrollSpeed; speedLabel.textContent = scrollSpeed + "x"; }
+    if (s.fontSize) { fontSize = s.fontSize; contentEl.style.fontSize = fontSize + "px"; }
+    if (s.opacity !== undefined) { document.body.style.opacity = s.opacity; opacitySlider.value = Math.round(s.opacity * 100); }
+    if (s.autoScroll !== undefined) { autoScroll = s.autoScroll; if (autoScroll && currentContent) startScroll(); }
+  }
+  function saveSettings() {
+    if (window.overlayAPI?.saveSettings) {
+      window.overlayAPI.saveSettings({ scrollSpeed, fontSize, opacity: parseFloat(opacitySlider.value) / 100, autoScroll });
+    }
+  }
+
+  // ── IPC listeners ──
+  window.closeOverlay = () => { if (window.overlayAPI?.closeOverlay) window.overlayAPI.closeOverlay(); };
+  if (window.overlayAPI) {
+    window.overlayAPI.onContent(setContent);
+    window.overlayAPI.onOpacity((v) => { opacitySlider.value = Math.round(v * 100); document.body.style.opacity = v; });
+    window.overlayAPI.onScrollSpeed((s) => { scrollSpeed = s === "slow" ? 0.5 : s === "fast" ? 2.0 : 1.0; speedLabel.textContent = scrollSpeed + "x"; });
+    window.overlayAPI.onAutoScroll((e) => { autoScroll = e; if (e) startScroll(); else stopScroll(); });
+    loadSettings();
+  }
+
+  // Auto-save on change
+  function changeSpeed(d) { scrollSpeed = Math.max(0.25, Math.min(5.0, scrollSpeed + d)); speedLabel.textContent = scrollSpeed + "x"; if (scrollInterval) startScroll(); saveSettings(); }
+  function changeFont(d) { fontSize = Math.max(10, Math.min(36, fontSize + d)); contentEl.style.fontSize = fontSize + "px"; saveSettings(); }
+  function updateOpacity(v) { document.body.style.opacity = parseInt(v) / 100; if (window.overlayAPI) window.overlayAPI.setOpacity(parseInt(v) / 100); saveSettings(); }
+</script>
+</body>
+</html>

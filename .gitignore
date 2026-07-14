@@ -1,0 +1,32 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Electron build
+electron/node_modules/
+electron/package-lock.json
+electron/build/
+electron/dist/
+
+# PyInstaller
+*.spec
+build/
+
+# Build output
+dist/
+
+# User notes
+chat.md
+jishu.md
