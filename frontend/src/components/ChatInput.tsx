@@ -1,7 +1,9 @@
-/** 对话输入栏 —— 斜杠命令 + 语音占位 + 发送/中止 */
+/** 对话输入栏 —— 斜杠命令 + 语音输入 + 发送/中止 */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Mic, Send, Square } from "lucide-react";
+import { Mic, MicOff, Send, Square } from "lucide-react";
+import { startListening, stopListening, type VoiceState } from "../lib/voiceInput";
+import { apiPost } from "../lib/api";
 
 const COMMANDS = [
   { cmd: "/intro", desc: "生成自我介绍", hint: "/intro [要求]" },
@@ -20,60 +22,43 @@ export default function ChatInput({ onSend, onStop, generating }: Props) {
   const [text, setText] = useState("");
   const [showSlash, setShowSlash] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voiceText, setVoiceText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Filter based on typed prefix
   const filtered = text.startsWith("/")
     ? COMMANDS.filter(c => c.cmd.startsWith(text.split(" ")[0]))
     : [];
 
-  const handleInput = (val: string) => {
-    setText(val);
-    setShowSlash(val.startsWith("/") && filtered.length > 0);
-    setActiveIdx(0);
-  };
+  const handleInput = (val: string) => { setText(val); setShowSlash(val.startsWith("/") && filtered.length > 0); setActiveIdx(0); };
+  const fillSlash = useCallback((cmd: string) => { setText(cmd + " "); setShowSlash(false); inputRef.current?.focus(); }, []);
+  const send = () => { const t = text.trim(); if (!t || generating) return; onSend(t); setText(""); setShowSlash(false); };
 
-  const fillSlash = useCallback((cmd: string) => {
-    setText(cmd + " ");
-    setShowSlash(false);
-    inputRef.current?.focus();
-  }, []);
-
-  const send = () => {
-    const trimmed = text.trim();
-    if (!trimmed || generating) return;
-    onSend(trimmed);
-    setText("");
-    setShowSlash(false);
-  };
-
-  // Keyboard: Escape to close, Arrow keys + Enter to navigate
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showSlash && filtered.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setActiveIdx((activeIdx + 1) % filtered.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setActiveIdx((activeIdx - 1 + filtered.length) % filtered.length);
-        return;
-      }
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        fillSlash(filtered[activeIdx].cmd);
-        return;
-      }
-      if (e.key === "Escape") {
-        setShowSlash(false);
-        return;
-      }
+      if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((activeIdx + 1) % filtered.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((activeIdx - 1 + filtered.length) % filtered.length); return; }
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); fillSlash(filtered[activeIdx].cmd); return; }
+      if (e.key === "Escape") { setShowSlash(false); return; }
     }
-    if (e.key === "Enter" && !e.shiftKey && !generating) {
-      e.preventDefault();
-      send();
+    if (e.key === "Enter" && !e.shiftKey && !generating) { e.preventDefault(); send(); }
+  };
+
+  // ── Voice input ──
+  const toggleVoice = async () => {
+    if (voiceState === "listening" || voiceState === "connecting") {
+      stopListening();
+      setVoiceState("idle");
+      return;
     }
+    try {
+      const { url, appid } = await apiPost<{url:string;appid:string}>("/api/settings/voice/auth-url", {});
+      startListening(url, appid || "", {
+        onResult: (t, _isFinal) => { console.log("[voice] text:", t); setText(t); },
+        onStateChange: setVoiceState,
+        onError: (msg) => { alert(msg); setVoiceState("idle"); },
+      });
+    } catch { alert("请先在设置中配置讯飞语音服务"); setVoiceState("idle"); }
   };
 
   return (
@@ -102,11 +87,15 @@ export default function ChatInput({ onSend, onStop, generating }: Props) {
       {/* Input row */}
       <div className="flex gap-2 items-center">
         <button
-          disabled
-          className="p-2 rounded-lg text-zinc-300 cursor-not-allowed"
-          title="语音输入（需配置扩展）"
+          onClick={toggleVoice}
+          className={`p-2 rounded-lg transition-colors ${
+            voiceState === "listening" ? "bg-red-100 text-red-500 animate-pulse" :
+            voiceState === "connecting" ? "bg-amber-50 text-amber-500" :
+            "text-zinc-400 hover:text-indigo-500 hover:bg-zinc-100"
+          }`}
+          title={voiceState === "listening" ? "点击停止并发送" : voiceState === "connecting" ? "连接中…" : "语音输入"}
         >
-          <Mic size={18} />
+          {voiceState === "listening" ? <MicOff size={18} /> : <Mic size={18} />}
         </button>
         <input
           ref={inputRef}

@@ -61,6 +61,15 @@ function stopBackend() {
 // ── Main window ────────────────────────────────────────────
 
 function createWindow() {
+  // Grant persistent microphone access (no repeated prompts)
+  const { session: { defaultSession } } = require("electron");
+  defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === "media");
+  });
+  defaultSession.setPermissionCheckHandler((_wc, permission) => {
+    return permission === "media";
+  });
+
   mainWindow = new BrowserWindow({
     width: 1200, height: 800, minWidth: 900, minHeight: 600,
     title: "SpeakWise 智能面试助手",

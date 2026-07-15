@@ -1,7 +1,7 @@
 """呈现偏好 + LLM 配置 API"""
 
 import json as _json
-from fastapi import Body, APIRouter, Depends, HTTPException
+from fastapi import Body, APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlmodel import Session, select
 from openai import AsyncOpenAI
 
@@ -250,6 +250,127 @@ def get_active_apikey(db) -> dict | None:
     if k:
         return {"provider": k.provider, "api_key": k.api_key, "model": k.model}
     return None
+
+
+# ── 讯飞语音配置 ──
+
+@router.get("/settings/voice")
+def get_voice_settings(session: Session = Depends(get_session)):
+    profile = profile_service.get_or_create_profile(session)
+    ds = session.exec(select(DisplaySettings).where(DisplaySettings.profile_id == profile.id)).first()
+    if not ds:
+        return {"appid": "", "api_key": "", "api_secret": ""}
+    return {"appid": ds.xf_appid or "", "api_key": ds.xf_api_key or "", "api_secret": ds.xf_api_secret or ""}
+
+@router.put("/settings/voice")
+def update_voice_settings(data: dict = Body(...), session: Session = Depends(get_session)):
+    profile = profile_service.get_or_create_profile(session)
+    ds = session.exec(select(DisplaySettings).where(DisplaySettings.profile_id == profile.id)).first()
+    if not ds:
+        ds = DisplaySettings(profile_id=profile.id); session.add(ds)
+    field_map = {"appid": "xf_appid", "api_key": "xf_api_key", "api_secret": "xf_api_secret"}
+    for json_f, db_f in field_map.items():
+        if json_f in data: setattr(ds, db_f, data[json_f])
+    session.add(ds); session.commit()
+    return {"ok": True}
+
+@router.post("/settings/voice/auth-url")
+def get_xfyun_auth_url(data: dict = Body(...), session: Session = Depends(get_session)):
+    """生成讯飞 WebSocket 认证 URL。"""
+    import hashlib, hmac, base64
+    from datetime import datetime, timezone
+
+    profile = profile_service.get_or_create_profile(session)
+    ds = session.exec(select(DisplaySettings).where(DisplaySettings.profile_id == profile.id)).first()
+    api_key = data.get("api_key") or (ds.xf_api_key if ds else "")
+    api_secret = data.get("api_secret") or (ds.xf_api_secret if ds else "")
+
+    if not api_key or not api_secret:
+        raise HTTPException(400, "请先配置讯飞 API Key 和 Secret")
+
+    host = "iat-api.xfyun.cn"
+    path = "/v2/iat"
+    now = datetime.now(timezone.utc)
+    date = now.strftime("%a, %d %b %Y %H:%M:%S GMT")
+    signature_origin = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
+    signature_sha = hmac.new(api_secret.encode(), signature_origin.encode(), hashlib.sha256).digest()
+    signature = base64.b64encode(signature_sha).decode()
+    authorization_origin = f'api_key="{api_key}", algorithm="hmac-sha256", headers="host date request-line", signature="{signature}"'
+    authorization = base64.b64encode(authorization_origin.encode()).decode()
+    import urllib.parse
+    appid = data.get("appid") or (ds.xf_appid if ds else "")
+    url = f"wss://{host}{path}?authorization={urllib.parse.quote(authorization)}&date={urllib.parse.quote(date)}&host={host}"
+    return {"url": url, "appid": appid}
+
+
+# ── 语音转写（完整音频 → iFlytek WebSocket → 文字）──
+
+@router.post("/voice/transcribe")
+async def transcribe_audio(
+    audio: UploadFile = File(...),
+    sample_rate: str = Form("16000"),
+    session: Session = Depends(get_session),
+):
+    """接收 PCM 音频，通过讯飞 WebSocket 转写为文字。"""
+    profile = profile_service.get_or_create_profile(session)
+    ds = session.exec(select(DisplaySettings).where(DisplaySettings.profile_id == profile.id)).first()
+    if not ds or not ds.xf_api_key or not ds.xf_api_secret:
+        raise HTTPException(400, "请先配置讯飞语音服务")
+
+    raw = await audio.read()
+    if len(raw) == 0:
+        return {"text": ""}
+
+    # Generate auth URL
+    import hashlib, hmac, base64, urllib.parse
+    from datetime import datetime, timezone
+    host = "iat-api.xfyun.cn"; path = "/v2/iat"
+    now = datetime.now(timezone.utc)
+    date = now.strftime("%a, %d %b %Y %H:%M:%S GMT")
+    sig_input = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
+    sig_sha = hmac.new(ds.xf_api_secret.encode(), sig_input.encode(), hashlib.sha256).digest()
+    sig_b64 = base64.b64encode(sig_sha).decode()
+    auth_raw = f'api_key="{ds.xf_api_key}", algorithm="hmac-sha256", headers="host date request-line", signature="{sig_b64}"'
+    auth_b64 = base64.b64encode(auth_raw.encode()).decode()
+    ws_url = f"wss://{host}{path}?authorization={urllib.parse.quote(auth_b64)}&date={urllib.parse.quote(date)}&host={host}"
+
+    import asyncio, websockets, json as _json
+    appid = ds.xf_appid or ""
+
+    async def _do_transcribe():
+        try:
+            async with websockets.connect(ws_url, ping_interval=None, close_timeout=5) as w:
+                await w.send(_json.dumps({
+                    "common": {"app_id": appid},
+                    "business": {"language": "zh_cn", "domain": "iat", "accent": "mandarin"},
+                    "data": {"status": 0, "format": "audio/L16;rate=" + sample_rate, "encoding": "raw"}
+                }))
+                resp = await asyncio.wait_for(w.recv(), timeout=5)
+                # Send PCM audio
+                await w.send(raw)
+                await w.send(_json.dumps({"data": {"status": 2}}))
+                # Collect results
+                full_text = ""
+                while True:
+                    try:
+                        resp = await asyncio.wait_for(w.recv(), timeout=5)
+                        msg = _json.loads(resp)
+                        if msg.get("code", 0) != 0:
+                            break
+                        if msg.get("data", {}).get("result"):
+                            for ws1 in msg["data"]["result"].get("ws", []):
+                                for cw in ws1.get("cw", []):
+                                    full_text += cw.get("w", "")
+                        if msg.get("data", {}).get("status") == 2:
+                            break
+                    except asyncio.TimeoutError:
+                        break
+                return full_text
+        except Exception:
+            return ""
+
+    text = await _do_transcribe()
+    return {"text": text}
 
 
 def _get_data_dir() -> str:

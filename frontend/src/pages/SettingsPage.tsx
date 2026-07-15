@@ -346,6 +346,9 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      {/* === Voice Settings === */}
+      <VoiceSettings />
+
       {/* Data Path */}
       <section className="bg-white border border-zinc-200 rounded-xl p-5">
         <h3 className="font-semibold mb-3 flex items-center gap-2"><Shield size={16} /> 数据存储</h3>
@@ -393,5 +396,47 @@ export default function SettingsPage() {
         </button>
       </section>
     </div>
+  );
+}
+
+/* ── Voice Settings (iFlytek) ── */
+
+function VoiceSettings() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [appid, setAppid] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+
+  const { data: savedVoice } = useQuery({
+    queryKey: ["settings","voice"],
+    queryFn: () => apiGet<{appid:string;api_key:string;api_secret:string}>("/api/settings/voice"),
+  });
+  useEffect(() => {
+    if (savedVoice) { setAppid(savedVoice.appid||""); setApiKey(savedVoice.api_key||""); setApiSecret(savedVoice.api_secret||""); }
+  }, [savedVoice]);
+
+  const saveMut = useMutation({
+    mutationFn: (d: Record<string,string>) => apiPut("/api/settings/voice", d),
+    onSuccess: () => { toast.success("语音配置已保存"); qc.invalidateQueries({queryKey:["settings","voice"]}); },
+    onError: () => toast.error("保存失败"),
+  });
+
+  return (
+    <section className="bg-white border border-zinc-200 rounded-xl p-5 mb-5">
+      <details>
+        <summary className="font-semibold cursor-pointer">🎤 语音输入（讯飞）</summary>
+        <p className="text-xs text-zinc-400 mt-2 mb-3">
+          配置讯飞语音听写服务，即可使用麦克风语音输入。注册地址：<a href="https://www.xfyun.cn/" target="_blank" className="text-indigo-600 underline">xfyun.cn</a>
+        </p>
+        <div className="space-y-2">
+          <input value={appid} onChange={e => setAppid(e.target.value)} placeholder="APPID" className="w-full text-xs border rounded-lg px-2 py-1.5 font-mono" />
+          <input value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="API Key" className="w-full text-xs border rounded-lg px-2 py-1.5 font-mono" />
+          <input value={apiSecret} onChange={e => setApiSecret(e.target.value)} placeholder="API Secret" type="password" className="w-full text-xs border rounded-lg px-2 py-1.5 font-mono" />
+        </div>
+        <button onClick={() => saveMut.mutate({appid, api_key: apiKey, api_secret: apiSecret})}
+          className="text-xs bg-indigo-600 text-white rounded-lg px-3 py-1.5 mt-2 hover:bg-indigo-700">保存</button>
+      </details>
+    </section>
   );
 }

@@ -17,15 +17,19 @@ def build_intro_messages(profile_data: dict, jd_analysis: dict | None, extra: st
     style_override = ""
     if template_rules:
         if template_rules.get("structure"):
-            struct_override = f"\n用户指定的结构规则（必须遵循）：{template_rules['structure']}"
+            struct_override = f"用户指定的结构规则（必须遵循）：{template_rules['structure']}"
         if template_rules.get("style"):
-            style_override = f"\n用户指定的风格规则：{template_rules['style']}"
+            style_override = f"用户指定的风格规则：{template_rules['style']}"
 
     user_ctrl = USER_CONTROL_TEMPLATE.format(
         extra_requirements=f"额外要求：{extra}" if extra else ""
-    ) + struct_override + style_override
+    )
 
     context_parts = [f"【用户简历】：{_format_profile(profile_data)}"]
+    if struct_override:
+        context_parts.append(struct_override.strip())
+    if style_override:
+        context_parts.append(style_override.strip())
     if jd_analysis:
         context_parts.append(f"【目标岗位】：核心技能={jd_analysis.get('core_skills',[])}；职责={jd_analysis.get('duties',[])}；价值观={jd_analysis.get('culture_values',[])}")
     else:

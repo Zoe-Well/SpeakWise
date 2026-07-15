@@ -323,14 +323,15 @@ async def handle_message(
             base += f"\n【用户背景】{profile_summary}\n基于以下对话历史，提出一个自然的追问。\n{context}"
         else:
             base += f"\n【用户背景】{profile_summary}\n基于以上面试准备对话，生成一个面试官可能追问的、有挑战性的问题。"
+        user_extra = "只输出追问问题本身，不加前缀。"
         if template_rules:
             if template_rules.get("structure"):
-                base += f"\n用户指定的结构规则：{template_rules['structure']}"
+                user_extra += f"\n用户指定的结构规则：{template_rules['structure']}"
             if template_rules.get("style"):
-                base += f"\n用户指定的风格规则：{template_rules['style']}"
+                user_extra += f"\n用户指定的风格规则：{template_rules['style']}"
         async for chunk in _native_thinking_stream([
             {"role": "system", "content": base},
-            {"role": "user", "content": "只输出追问问题本身，不加前缀。"},
+            {"role": "user", "content": user_extra},
         ], temperature=0.6, model=model):
             yield chunk
 
@@ -348,9 +349,9 @@ async def handle_message(
         user_msg = _build_free_text_context(profile_data, jd_analysis, content, context)
         if template_rules:
             if template_rules.get("structure"):
-                sys_msg += f"\n结构规则：{template_rules['structure']}"
+                user_msg += f"\n用户指定的结构规则：{template_rules['structure']}"
             if template_rules.get("style"):
-                sys_msg += f"\n风格规则：{template_rules['style']}"
+                user_msg += f"\n用户指定的风格规则：{template_rules['style']}"
         async for chunk in _native_thinking_stream([
             {"role": "system", "content": sys_msg},
             {"role": "user", "content": user_msg},

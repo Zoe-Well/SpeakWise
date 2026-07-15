@@ -21,4 +21,8 @@ class DisplaySettings(SQLModel, table=True):
     llm_provider: Optional[str] = Field(default="deepseek", max_length=30)
     llm_api_key: Optional[str] = Field(default=None, max_length=200)
     llm_model: Optional[str] = Field(default=None, max_length=100)
+    # 讯飞语音配置
+    xf_appid: Optional[str] = Field(default=None, max_length=100)
+    xf_api_key: Optional[str] = Field(default=None, max_length=200)
+    xf_api_secret: Optional[str] = Field(default=None, max_length=200)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

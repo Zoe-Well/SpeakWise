@@ -78,6 +78,15 @@ def init_db():
     except Exception:
         pass
 
+    # Voice settings columns
+    try:
+        with engine.connect() as conn:
+            for col in ("xf_appid", "xf_api_key", "xf_api_secret"):
+                try: conn.execute(text(f"ALTER TABLE display_settings ADD COLUMN {col} TEXT"))
+                except Exception: pass
+            conn.commit()
+    except Exception: pass
+
     # api_keys model column (added later)
     try:
         with engine.connect() as conn:
