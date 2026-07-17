@@ -12,6 +12,7 @@ class UserProfile(SQLModel, table=True):
     name: str = Field(default="未命名", max_length=100)
     phone: Optional[str] = Field(default=None, max_length=30)
     email: Optional[str] = Field(default=None, max_length=200)
+    is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

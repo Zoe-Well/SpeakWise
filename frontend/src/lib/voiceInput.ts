@@ -40,47 +40,94 @@ export async function startListening(wsUrl: string, appId: string, callbacks: Vo
     audioCtx = new AudioContext({ sampleRate: 16000 });
     await audioCtx.resume();
     await audioCtx.audioWorklet.addModule(workletUrl);
-  } catch(e) { callbacks.onError("音频初始化失败"); callbacks.onStateChange("error"); return; }
+  } catch(e) { console.error("[voice] audio init failed:", e); callbacks.onError("音频初始化失败"); callbacks.onStateChange("error"); return; }
 
   ws = new WebSocket(wsUrl);
+  ws.binaryType = "arraybuffer";
+
   ws.onopen = () => {
-    console.log("[voice] WS connected");
+    console.log("[voice] WS connected, sending init frame");
     callbacks.onStateChange("listening");
 
+    // Send init frame (use raw encoding — audio will be sent as JSON-wrapped base64)
     ws!.send(JSON.stringify({
       common: { app_id: appId },
       business: { language: "zh_cn", domain: "iat", accent: "mandarin" },
       data: { status: 0, format: "audio/L16;rate=16000", encoding: "raw" }
     }));
 
-    const wn = new AudioWorkletNode(audioCtx!, "pcm");
-    const src = audioCtx!.createMediaStreamSource(stream!);
-    src.connect(wn);
-    const g = audioCtx!.createGain(); g.gain.value = 0;
-    wn.connect(g); g.connect(audioCtx!.destination);
+    try {
+      const wn = new AudioWorkletNode(audioCtx!, "pcm");
+      const src = audioCtx!.createMediaStreamSource(stream!);
+      src.connect(wn);
+      // Keep worklet alive via muted output
+      const g = audioCtx!.createGain(); g.gain.value = 0;
+      wn.connect(g); g.connect(audioCtx!.destination);
 
-    let ready = false;
+      let serverReady = false;
+      let textReceived = false;
+      let noTextTimer: ReturnType<typeof setTimeout> | null = null;
 
-    wn.port.onmessage = (e) => {
-      if (!ready || ws?.readyState !== WebSocket.OPEN) return;
-      ws!.send(e.data);
-    };
+      // Convert PCM ArrayBuffer to base64 and send as JSON-wrapped frame
+      function arrayBufferToBase64(buffer: ArrayBuffer): string {
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
+      }
 
-    ws!.addEventListener("message", (e) => {
-      if (!ready) { ready = true; console.log("[voice] server ready"); }
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.code !== 0 && msg.message) { callbacks.onError(msg.message); stopListening(); return; }
-        if (msg.data?.result) {
-          let text = "";
-          for (const w of msg.data.result.ws || []) for (const c of w.cw || []) text += c.w;
-          if (text) { console.log("[voice] text:", text); callbacks.onResult(text, msg.data.status === 2); }
+      // Send audio chunks as JSON-wrapped base64 (iFlytek requires this format)
+      wn.port.onmessage = (e) => {
+        if (ws?.readyState !== WebSocket.OPEN) return;
+        const b64 = arrayBufferToBase64(e.data as ArrayBuffer);
+        ws!.send(JSON.stringify({
+          data: { status: 1, format: "audio/L16;rate=16000", encoding: "raw", audio: b64 }
+        }));
+        if (!serverReady) {
+          // Start a timeout: if no text after 5s of sending audio, warn
+          if (!noTextTimer) {
+            noTextTimer = setTimeout(() => {
+              if (!textReceived) {
+                console.warn("[voice] no text received after 5s — check credentials or audio");
+                callbacks.onError("未识别到语音，请检查麦克风权限或讯飞配置");
+                stopListening();
+              }
+            }, 5000);
+          }
         }
-      } catch { /* */ }
-    });
+      };
+
+      ws!.addEventListener("message", (e) => {
+        if (!serverReady) { serverReady = true; console.log("[voice] server ready"); }
+        try {
+          const msg = JSON.parse(e.data as string);
+          const code = msg.code ?? 0;
+          if (code !== 0 && msg.message) {
+            console.error("[voice] server error:", code, msg.message);
+            callbacks.onError(`识别失败: ${msg.message}`);
+            stopListening();
+            return;
+          }
+          if (msg.data?.result) {
+            let text = "";
+            for (const w of msg.data.result.ws || []) for (const c of w.cw || []) text += c.w;
+            if (text) {
+              textReceived = true;
+              if (noTextTimer) { clearTimeout(noTextTimer); noTextTimer = null; }
+              console.log("[voice] text:", text);
+              callbacks.onResult(text, msg.data.status === 2);
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      });
+    } catch (e) {
+      console.error("[voice] worklet setup failed:", e);
+      callbacks.onError("音频处理初始化失败");
+      callbacks.onStateChange("error");
+    }
   };
 
-  ws.onerror = () => { callbacks.onError("连接失败"); callbacks.onStateChange("error"); };
+  ws.onerror = () => { console.error("[voice] WS error"); callbacks.onError("语音服务连接失败"); callbacks.onStateChange("error"); };
   ws.onclose = () => callbacks.onStateChange("idle");
 }
 

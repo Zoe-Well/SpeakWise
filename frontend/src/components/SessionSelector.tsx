@@ -26,11 +26,13 @@ interface Props {
 export default function SessionSelector({ activeId, onSelect }: Props) {
   const qc = useQueryClient();
   const toast = useToast();
-  const { data: sessions = [] } = useQuery<Session[]>({
+  const { data: allSessions = [] } = useQuery<Session[]>({
     queryKey: ["sessions"],
     queryFn: () => apiGet("/api/sessions"),
     refetchInterval: 5000,
   });
+  // Exclude mock interview sessions (managed on InterviewPage)
+  const sessions = allSessions.filter(s => s.mode !== "mock");
 
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());

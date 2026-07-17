@@ -78,6 +78,15 @@ def init_db():
     except Exception:
         pass
 
+    # is_active columns for profile/JD/document versioning
+    try:
+        with engine.connect() as conn:
+            for tbl, col in [("user_profiles","is_active"), ("job_contexts","is_active"), ("source_documents","is_active")]:
+                try: conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col} BOOLEAN DEFAULT 1"))
+                except Exception: pass
+            conn.commit()
+    except Exception: pass
+
     # Voice settings columns
     try:
         with engine.connect() as conn:
@@ -108,6 +117,14 @@ def init_db():
     except Exception:
         pass
 
+    # JobContext name column (added for multi-JD management)
+    try:
+        with engine.connect() as conn:
+            try: conn.execute(text("ALTER TABLE job_contexts ADD COLUMN name TEXT DEFAULT ''"))
+            except Exception: pass
+            conn.commit()
+    except Exception: pass
+
     # Ensure template_defaults table exists (may need manual creation for existing DBs)
     try:
         with engine.connect() as conn:
@@ -117,6 +134,17 @@ def init_db():
                 "scope VARCHAR(30) NOT NULL, template_id VARCHAR(100) NOT NULL, "
                 "updated_at DATETIME)"
             ))
+            conn.commit()
+    except Exception:
+        pass
+
+    # clear_existing column for profile_update_proposals (overwrite vs append)
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE profile_update_proposals ADD COLUMN clear_existing BOOLEAN DEFAULT 0"))
+            except Exception:
+                pass
             conn.commit()
     except Exception:
         pass

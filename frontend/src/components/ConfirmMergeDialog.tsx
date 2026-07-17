@@ -29,11 +29,12 @@ function formatValue(target: string, value: Record<string, unknown>): string {
 
 interface Props {
   changes: Change[];
+  clearExisting?: boolean;
   onConfirm: (acceptedIds: string[]) => void;
   onCancel: () => void;
 }
 
-export default function ConfirmMergeDialog({ changes, onConfirm, onCancel }: Props) {
+export default function ConfirmMergeDialog({ changes, clearExisting, onConfirm, onCancel }: Props) {
   const [visible, setVisible] = useState<number>(0);
 
   // Progressive reveal: show items one by one with 200ms delay
@@ -76,6 +77,11 @@ export default function ConfirmMergeDialog({ changes, onConfirm, onCancel }: Pro
               {allVisible ? `共 ${changes.length} 项` : `${showing}/${changes.length}`}
             </span>
           </div>
+          {clearExisting && (
+            <div className="mt-2 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2">
+              ⚠️ 替换模式：确认后将<b>清空</b>现有实习/项目/技能，仅保留本次导入的数据
+            </div>
+          )}
           {!allVisible && (
             <div className="mt-2 w-full bg-zinc-100 rounded-full h-1">
               <div className="bg-zinc-800 h-1 rounded-full transition-all duration-300"

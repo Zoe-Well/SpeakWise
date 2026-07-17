@@ -1,4 +1,4 @@
-/** 个人知识库页面 —— 录入/编辑/删除 + 文档导入与解析确认 */
+/** 个人知识库页面 —— 录入/编辑/删除 + 文档导入与解析确认 + 多简历管理 */
 
 import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -6,17 +6,23 @@ import { apiGet, apiPost, apiPut, apiDelete } from "../lib/api";
 import { Plus, Trash2, Save, Edit3 } from "lucide-react";
 import DocumentImport from "../components/DocumentImport";
 import ConfirmMergeDialog from "../components/ConfirmMergeDialog";
+import ApiKeyRequiredDialog from "../components/ApiKeyRequiredDialog";
 import { EditableInternship, EditableProject } from "../components/EditableItem";
+import { useLLMStatus } from "../lib/useLLMStatus";
 import { useToast } from "../components/Toast";
 
-interface Profile { id: number; name: string; phone?: string; email?: string; }
+interface Profile { id: number; name: string; phone?: string; email?: string; is_active?: boolean; }
 interface Internship { id: number; company: string; position: string; start_date: string; end_date?: string; achievements: string[]; }
 interface Project { id: number; type: string; name: string; role: string; tech_stack: string[]; challenge: string; solution: string; result: string; }
 interface Skill { id: number; category: string; name: string; proficiency: string; }
+interface ResumeItem { id: number; name: string; is_active: boolean; internship_count: number; project_count: number; skill_count: number; }
 
 export default function ProfilePage() {
   const qc = useQueryClient();
   const toast = useToast();
+  const { isConfigured: llmConfigured } = useLLMStatus();
+  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
+  const { data: resumes = [] } = useQuery<ResumeItem[]>({ queryKey: ["resumes"], queryFn: () => apiGet("/api/resumes") });
   const { data: profile } = useQuery<Profile>({ queryKey: ["profile"], queryFn: () => apiGet("/api/profile") });
   const { data: internships = [] } = useQuery<Internship[]>({ queryKey: ["internships"], queryFn: () => apiGet("/api/experiences?type=internship") });
   const { data: projects = [] } = useQuery<Project[]>({ queryKey: ["projects"], queryFn: () => apiGet("/api/experiences?type=project") });
@@ -28,14 +34,57 @@ export default function ProfilePage() {
   const profileDocs = allDocs.filter(d => d.scope === "profile");
   const jdDocs = allDocs.filter(d => d.scope === "jd");
 
+  // ── Resume management handlers ──
+  const handleSwitchResume = async (id: number) => {
+    try {
+      await apiPost(`/api/resumes/${id}/activate`);
+      invalidateAll();
+      toast.success("简历已切换");
+    } catch { toast.error("切换失败"); }
+  };
+
+  const handleCreateResume = async () => {
+    const name = prompt("请输入新简历名称：", `简历 ${resumes.length + 1}`);
+    if (!name?.trim()) return;
+    try {
+      await apiPost("/api/resumes", { name: name.trim() });
+      invalidateAll();
+      toast.success(`简历「${name.trim()}」已创建并激活`);
+    } catch { toast.error("创建失败"); }
+  };
+
+  const handleDeleteResume = async (id: number) => {
+    if (resumes.length <= 1) { toast.error("至少保留一份简历"); return; }
+    const item = resumes.find(r => r.id === id);
+    if (!confirm(`确定删除简历「${item?.name || id}」？其下的实习/项目/技能/文档将一并删除。`)) return;
+    try {
+      await apiDelete(`/api/resumes/${id}`);
+      invalidateAll();
+      toast.success("已删除");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "删除失败";
+      toast.error(msg.includes("last") ? "至少保留一份简历" : "删除失败");
+    }
+  };
+
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ["resumes"] });
+    qc.invalidateQueries({ queryKey: ["profile"] });
+    qc.invalidateQueries({ queryKey: ["internships"] });
+    qc.invalidateQueries({ queryKey: ["projects"] });
+    qc.invalidateQueries({ queryKey: ["skills"] });
+    qc.invalidateQueries({ queryKey: ["documents","all"] });
+  };
+
   // 文档解析确认弹窗
   const [mergeChanges, setMergeChanges] = useState<Array<{id:string;op:string;target:string;value:Record<string,unknown>;conflict:boolean}> | null>(null);
   const [mergeProposalId, setMergeProposalId] = useState<number | null>(null);
+  const [mergeClearExisting, setMergeClearExisting] = useState(false);
 
   // Poll for pending resume parse proposals (page may have been navigated away during upload)
   const { data: pendingProposals } = useQuery({
     queryKey: ["profile-proposals"],
-    queryFn: () => apiGet<Array<{proposal_id:number;changes:Array<{id:string;op:string;target:string;value:Record<string,unknown>;conflict:boolean}>}>>("/api/profile/proposals"),
+    queryFn: () => apiGet<Array<{proposal_id:number;changes:Array<{id:string;op:string;target:string;value:Record<string,unknown>;conflict:boolean}>;clear_existing:boolean}>>("/api/profile/proposals"),
     refetchInterval: 5000, // poll every 5s while on this page
   });
   useEffect(() => {
@@ -44,15 +93,34 @@ export default function ProfilePage() {
       if (!mergeChanges) {
         setMergeProposalId(p.proposal_id);
         setMergeChanges(p.changes);
+        setMergeClearExisting(p.clear_existing || false);
       }
     }
   }, [pendingProposals]);
+
+  const reparseDoc = async (docId: number) => {
+    if (!llmConfigured) { setShowApiKeyDialog(true); return; }
+    try {
+      const result = await apiPost<Record<string, unknown>>(`/api/documents/${docId}/reparse`);
+      const proposal = result?.proposal as Record<string, unknown> | undefined;
+      if (proposal && Array.isArray(proposal.changes) && proposal.changes.length > 0) {
+        setMergeProposalId(proposal.proposal_id as number);
+        setMergeChanges(proposal.changes as Array<{id:string;op:string;target:string;value:Record<string,unknown>;conflict:boolean}>);
+        setMergeClearExisting((proposal.clear_existing as boolean) || false);
+        toast.success(`重新解析完成，提取 ${proposal.changes.length} 项`);
+      } else {
+        toast.success("重新解析完成，未提取到新字段");
+        qc.invalidateQueries({ queryKey: ["profile-proposals"] });
+      }
+    } catch { toast.error("重新解析失败"); }
+  };
 
   const handleDocSuccess = (result: Record<string, unknown>) => {
     const proposal = result?.proposal as Record<string, unknown> | undefined;
     if (proposal && Array.isArray(proposal.changes) && proposal.changes.length > 0) {
       setMergeProposalId(proposal.proposal_id as number);
       setMergeChanges(proposal.changes as Array<{id:string;op:string;target:string;value:Record<string,unknown>;conflict:boolean}>);
+      setMergeClearExisting((proposal.clear_existing as boolean) || false);
     } else {
       qc.invalidateQueries({ queryKey: ["documents","all"] });
       qc.invalidateQueries({ queryKey: ["profile-proposals"] });
@@ -68,6 +136,7 @@ export default function ProfilePage() {
     }
     setMergeChanges(null);
     setMergeProposalId(null);
+    setMergeClearExisting(false);
     qc.invalidateQueries({ queryKey: ["internships"] });
     qc.invalidateQueries({ queryKey: ["projects"] });
     qc.invalidateQueries({ queryKey: ["skills"] });
@@ -78,42 +147,86 @@ export default function ProfilePage() {
   return (
     <div className="p-8 max-w-5xl mx-auto">
       <h2 className="text-xl font-semibold mb-1">📋 个人知识库</h2>
-      <p className="text-sm text-zinc-500 mb-6">录入并管理你的简历、实习、项目与技术栈。支持 TXT / DOC / PDF 文档导入。</p>
+      <p className="text-sm text-zinc-500 mb-4">录入并管理你的简历、实习、项目与技术栈。支持多份简历切换。支持 TXT / DOC / PDF 文档导入。</p>
+
+      {/* ── Resume Selector ── */}
+      <section className="bg-white border border-zinc-200 rounded-xl p-4 mb-5">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-sm font-medium text-zinc-600 flex-shrink-0">当前简历：</span>
+          <select
+            value={profile?.id || ""}
+            onChange={(e) => { const id = parseInt(e.target.value); if (id) handleSwitchResume(id); }}
+            className="border border-zinc-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px] max-w-xs"
+          >
+            {resumes.map(r => (
+              <option key={r.id} value={r.id}>
+                {r.name} ({r.internship_count}实习·{r.project_count}项目·{r.skill_count}技能){r.is_active ? " ✓" : ""}
+              </option>
+            ))}
+          </select>
+          <button onClick={handleCreateResume}
+            className="text-xs border border-zinc-200 rounded-lg px-3 py-2 hover:bg-zinc-50 flex-shrink-0">
+            <Plus size={13} className="inline mr-1" />新建简历
+          </button>
+          {resumes.length > 1 && (
+            <button onClick={() => profile && handleDeleteResume(profile.id)}
+              className="text-xs border border-red-200 text-red-500 rounded-lg px-3 py-2 hover:bg-red-50 flex-shrink-0">
+              <Trash2 size={13} className="inline mr-1" />删除当前
+            </button>
+          )}
+        </div>
+      </section>
 
       {/* 文档导入 */}
       <section className="bg-white border border-zinc-200 rounded-xl p-5 mb-5">
         <h3 className="font-semibold mb-3">文档导入</h3>
         <div className="flex gap-4">
           <div className="flex-1">
-            <DocumentImport scope="profile" usage="parse" onSuccess={handleDocSuccess} />
+            <DocumentImport
+              scope="profile" usage="parse" onSuccess={handleDocSuccess}
+              existingDocs={profileDocs.filter(d => d.usage === "parse")}
+              hasExistingData={internships.length > 0 || projects.length > 0 || skills.length > 0}
+              llmConfigured={llmConfigured}
+              onApiKeyRequired={() => setShowApiKeyDialog(true)}
+              onDelete={(id) => {
+                if (confirm("删除此文档？")) {
+                  apiDelete(`/api/documents/${id}`)
+                    .then(() => { qc.invalidateQueries({ queryKey: ["documents","all"] }); toast.success("已删除"); })
+                    .catch(() => toast.error("删除失败"));
+                }
+              }}
+            />
           </div>
           <div className="flex-1">
-            <DocumentImport scope="profile" usage="attach" onSuccess={() => qc.invalidateQueries({ queryKey: ["documents","all"] })} />
+            <DocumentImport
+              scope="profile" usage="attach"
+              onSuccess={() => qc.invalidateQueries({ queryKey: ["documents","all"] })}
+              existingDocs={profileDocs.filter(d => d.usage === "attach")}
+              llmConfigured={llmConfigured}
+              onApiKeyRequired={() => setShowApiKeyDialog(true)}
+              onDelete={(id) => {
+                if (confirm("删除此文档？")) {
+                  apiDelete(`/api/documents/${id}`)
+                    .then(() => { qc.invalidateQueries({ queryKey: ["documents","all"] }); toast.success("已删除"); })
+                    .catch(() => toast.error("删除失败"));
+                }
+              }}
+            />
           </div>
         </div>
-        {profileDocs.length > 0 && (
-          <div className="flex gap-2 mt-3 flex-wrap">
-            {profileDocs.map((d) => (
-              <span key={d.id} className="text-xs bg-zinc-100 border border-zinc-200 rounded-lg px-2.5 py-1.5 inline-flex items-center gap-1">
-                📎 {d.filename}
-                <button onClick={() => { if(confirm("删除此文档？")) { apiDelete(`/api/documents/${d.id}`).then(() => { qc.invalidateQueries({ queryKey: ["documents","all"] }); toast.success("已删除"); }).catch(() => toast.error("删除失败")); }}}
-                  className="text-zinc-400 hover:text-red-500 font-bold ml-1">×</button>
-              </span>
-            ))}
-          </div>
-        )}
       </section>
 
       {/* 解析确认弹窗 */}
       {mergeChanges && (
         <ConfirmMergeDialog
           changes={mergeChanges}
+          clearExisting={mergeClearExisting}
           onConfirm={handleMergeConfirm}
           onCancel={async () => {
             if (mergeProposalId) {
               await apiPost("/api/profile/merge", { proposal_id: mergeProposalId, accepted_change_ids: [] });
             }
-            setMergeChanges(null); setMergeProposalId(null);
+            setMergeChanges(null); setMergeProposalId(null); setMergeClearExisting(false);
             qc.invalidateQueries({ queryKey: ["profile-proposals"] });
           }}
         />
@@ -193,6 +306,13 @@ export default function ProfilePage() {
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span className="text-xs text-zinc-400">{d.created_at?.slice(0, 10)}</span>
+                  {d.scope === "profile" && d.usage === "parse" && d.parse_status === "success" && (
+                    <button
+                      onClick={() => reparseDoc(d.id)}
+                      className="text-xs text-zinc-400 hover:text-indigo-500 border border-zinc-200 rounded px-1.5 py-0.5 hover:border-indigo-200"
+                      title="重新解析此文档"
+                    >🔄 解析</button>
+                  )}
                   <button
                     onClick={() => {
                       if (confirm("删除此文档？")) {
@@ -209,6 +329,13 @@ export default function ProfilePage() {
           </div>
         )}
       </section>
+
+      <ApiKeyRequiredDialog
+        open={showApiKeyDialog}
+        onClose={() => setShowApiKeyDialog(false)}
+        featureName="简历解析"
+        highlight="llm"
+      />
     </div>
   );
 }

@@ -12,9 +12,15 @@ const PROVIDERS = [
   { key: "anthropic", name: "Anthropic (Claude)", desc: "claude-sonnet-4, claude-haiku 等", url: "console.anthropic.com" },
 ];
 
-export default function SettingsPage() {
+export default function SettingsPage({ highlight }: { highlight?: string | null }) {
   const toast = useToast();
   const qc = useQueryClient();
+
+  // Brief highlight animation when navigated from a config dialog
+  const [flashSection, setFlashSection] = useState<string | null>(null);
+  useEffect(() => {
+    if (highlight) { setFlashSection(highlight); setTimeout(() => setFlashSection(null), 2500); }
+  }, [highlight]);
 
   const [provider, setProvider] = useState("deepseek");
   const [apiKey, setApiKey] = useState("");
@@ -75,23 +81,24 @@ export default function SettingsPage() {
         await apiPut(`/api/settings/apikeys/${result.id}/activate`, {model: model || ""});
         qc.invalidateQueries({ queryKey: ["settings","apikeys"] });
         qc.invalidateQueries({ queryKey: ["settings","llm"] });
+        qc.invalidateQueries({ queryKey: ["llm-status"] });
         toast.success("Key 已添加并激活");
       } catch { toast.success("Key 已添加"); }
       setNewKeyName(""); setApiKey(""); setModel(""); setValid(null); setModels([]);
     },
-    onError: () => toast.error("添加失败"),
+    onError: (e: Error) => toast.error(e.message || "添加失败"),
   });
 
   const activateMut = useMutation({
     mutationFn: ({id, model}: {id:number;model:string}) => apiPut(`/api/settings/apikeys/${id}/activate`, {model}),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings","apikeys"] }); qc.invalidateQueries({ queryKey: ["settings","llm"] }); toast.success("已切换"); setActivatingId(null); setValid(null); setModels([]); },
-    onError: () => toast.error("切换失败"),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings","apikeys"] }); qc.invalidateQueries({ queryKey: ["settings","llm"] }); qc.invalidateQueries({ queryKey: ["llm-status"] }); toast.success("已切换"); setActivatingId(null); setValid(null); setModels([]); },
+    onError: (e: Error) => toast.error(e.message || "切换失败"),
   });
 
   const deleteKeyMut = useMutation({
     mutationFn: (id: number) => apiDelete(`/api/settings/apikeys/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings","apikeys"] }); toast.success("Key 已删除"); },
-    onError: () => toast.error("删除失败"),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["settings","apikeys"] }); qc.invalidateQueries({ queryKey: ["llm-status"] }); toast.success("Key 已删除"); },
+    onError: (e: Error) => toast.error(e.message || "删除失败"),
   });
 
   useEffect(() => {
@@ -124,8 +131,8 @@ export default function SettingsPage() {
 
   const saveMut = useMutation({
     mutationFn: (data: Record<string, unknown>) => apiPut("/api/settings/llm", data),
-    onSuccess: () => { toast.success("已保存"); qc.invalidateQueries({ queryKey: ["settings", "llm"] }); },
-    onError: () => toast.error("保存失败"),
+    onSuccess: () => { toast.success("已保存"); qc.invalidateQueries({ queryKey: ["settings", "llm"] }); qc.invalidateQueries({ queryKey: ["llm-status"] }); },
+    onError: (e: Error) => toast.error(e.message || "保存失败"),
   });
 
   const handleSave = () => {
@@ -139,7 +146,9 @@ export default function SettingsPage() {
       <p className="text-sm text-zinc-500 mb-6">配置 LLM API Key、选择模型、查看数据路径。</p>
 
       {/* === API Key (account-style) === */}
-      <section className="bg-white border border-zinc-200 rounded-xl p-5 mb-5">
+      <section className={`bg-white border rounded-xl p-5 mb-5 transition-all duration-700 ${
+        flashSection === "llm" ? "border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.4)] bg-amber-50/30" : "border-zinc-200"
+      }`}>
         <h3 className="font-semibold mb-3">🔑 API Key</h3>
 
         {/* Current active key */}
@@ -261,9 +270,12 @@ export default function SettingsPage() {
                   <span>{k.name} · {k.provider} · {k.api_key}</span>
                   <span className="flex gap-1">
                     {k.is_active ? <span className="text-green-500">●</span> : <span className="text-zinc-300">○</span>}
-                    {!k.is_active && (
-                      <button onClick={() => deleteKeyMut.mutate(k.id)} className="text-zinc-400 hover:text-red-500">删除</button>
-                    )}
+                    <button onClick={() => {
+                      const warn = k.is_active
+                        ? "该 Key 当前正在使用中，删除后将无法使用 LLM 功能，确定删除？"
+                        : "确定删除此 Key？";
+                      if (confirm(warn)) deleteKeyMut.mutate(k.id);
+                    }} className="text-zinc-400 hover:text-red-500">删除</button>
                   </span>
                 </div>
               ))}
@@ -336,6 +348,7 @@ export default function SettingsPage() {
                 await apiPut("/api/settings/llm", { provider: "deepseek", api_key: "", model: "" });
                 setApiKey(""); setModel(""); setValid(null); setModels([]);
                 qc.invalidateQueries({ queryKey: ["settings", "llm"] });
+                qc.invalidateQueries({ queryKey: ["llm-status"] });
                 toast.success("API Key 已删除");
               } catch { toast.error("删除失败"); }
             }}
@@ -347,7 +360,7 @@ export default function SettingsPage() {
       </section>
 
       {/* === Voice Settings === */}
-      <VoiceSettings />
+      <VoiceSettings flashSection={flashSection} />
 
       {/* Data Path */}
       <section className="bg-white border border-zinc-200 rounded-xl p-5">
@@ -401,7 +414,7 @@ export default function SettingsPage() {
 
 /* ── Voice Settings (iFlytek) ── */
 
-function VoiceSettings() {
+function VoiceSettings({ flashSection }: { flashSection: string | null }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [appid, setAppid] = useState("");
@@ -419,12 +432,14 @@ function VoiceSettings() {
   const saveMut = useMutation({
     mutationFn: (d: Record<string,string>) => apiPut("/api/settings/voice", d),
     onSuccess: () => { toast.success("语音配置已保存"); qc.invalidateQueries({queryKey:["settings","voice"]}); },
-    onError: () => toast.error("保存失败"),
+    onError: (e: Error) => toast.error(e.message || "保存失败"),
   });
 
   return (
-    <section className="bg-white border border-zinc-200 rounded-xl p-5 mb-5">
-      <details>
+    <section className={`bg-white border rounded-xl p-5 mb-5 transition-all duration-700 ${
+      flashSection === "voice" ? "border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.4)] bg-amber-50/30" : "border-zinc-200"
+    }`}>
+      <details open={flashSection === "voice"}>
         <summary className="font-semibold cursor-pointer">🎤 语音输入（讯飞）</summary>
         <p className="text-xs text-zinc-400 mt-2 mb-3">
           配置讯飞语音听写服务，即可使用麦克风语音输入。注册地址：<a href="https://www.xfyun.cn/" target="_blank" className="text-indigo-600 underline">xfyun.cn</a>

@@ -5,19 +5,25 @@ import {
   FileText,
   BookOpen,
   Settings,
+  FileSearch,
+  Mic,
 } from "lucide-react";
 import ConversationPage from "./pages/ConversationPage";
 import ProfilePage from "./pages/ProfilePage";
 import JDPage from "./pages/JDPage";
 import PromptTemplatePage from "./pages/PromptTemplatePage";
+import ReviewPage from "./pages/ReviewPage";
+import InterviewPage from "./pages/InterviewPage";
 import SettingsPage from "./pages/SettingsPage";
 
-type Page = "conversation" | "profile" | "jd" | "prompts" | "settings";
+type Page = "conversation" | "profile" | "jd" | "prompts" | "review" | "interview" | "settings";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: "conversation", label: "对话", icon: <MessageCircle size={18} /> },
   { id: "profile", label: "个人知识库", icon: <User size={18} /> },
   { id: "jd", label: "岗位上下文", icon: <FileText size={18} /> },
+  { id: "review", label: "简历评审", icon: <FileSearch size={18} /> },
+  { id: "interview", label: "模拟面试", icon: <Mic size={18} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={18} /> },
   { id: "settings", label: "设置", icon: <Settings size={18} /> },
 ];
@@ -25,13 +31,18 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
 export default function App() {
   const [page, setPage] = useState<Page>("conversation");
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
+  const [settingsHighlight, setSettingsHighlight] = useState<string | null>(null);
 
   // Listen for navigation events from child components
   useEffect(() => {
     const handler = (e: Event) => {
-      const target = (e as CustomEvent).detail as Page;
-      if (["conversation", "profile", "jd", "prompts", "settings"].includes(target)) {
-        setPage(target);
+      const detail = (e as CustomEvent).detail;
+      if (typeof detail === "object" && detail !== null && "page" in detail && (detail as Record<string,unknown>).page === "settings") {
+        setPage("settings");
+        setSettingsHighlight((detail as Record<string,unknown>).highlight as string || null);
+      } else if (typeof detail === "string") {
+        setPage(detail as Page);
+        setSettingsHighlight(null);
       }
     };
     window.addEventListener("navigate", handler);
@@ -69,12 +80,14 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
-        <div key={page} className="animate-[fadeIn_0.2s_ease-out]">
+        <div key={page} className="animate-[fadeIn_0.2s_ease-out] h-full">
           {page === "conversation" && <ConversationPage activeSessionId={activeSessionId} onSessionChange={setActiveSessionId} />}
           {page === "profile" && <ProfilePage />}
           {page === "jd" && <JDPage activeSessionId={activeSessionId} />}
+          {page === "review" && <ReviewPage />}
+          {page === "interview" && <InterviewPage />}
           {page === "prompts" && <PromptTemplatePage />}
-        {page === "settings" && <SettingsPage />}
+        {page === "settings" && <SettingsPage highlight={settingsHighlight} />}
         </div>
       </main>
     </div>

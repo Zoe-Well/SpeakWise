@@ -57,17 +57,18 @@ async def generate(request: Request, session: Session = Depends(get_session)):
     # Reconfigure LLM from user settings (API key / provider / model from DB)
     _apply_llm_settings(session)
 
-    # Profile data + session mode
-    profile = profile_service.get_or_create_profile(session)
-    profile_data = conversation_service.build_profile_data_for_prompt(session)
+    # Profile data + session mode (use active profile only)
+    profile = profile_service.get_active_profile(session)
+    profile_data = conversation_service.build_profile_data_for_prompt(session, profile.id if profile else 1)
     conv_sess = session_service.get_session(session, session_id)
     session_mode = conv_sess.mode if conv_sess else "normal"
 
-    # Load latest JD context (always available; interview mode uses it)
+    # Load active JD context (is_active=True, not just latest)
     jd_analysis = None
     jc = session.exec(
         __import__("sqlmodel").select(JobContext)
         .where(JobContext.profile_id == profile.id)
+        .where(JobContext.is_active == True)  # noqa: E712
         .order_by(JobContext.id.desc())
     ).first()
     if jc:

@@ -9,24 +9,84 @@ from backend.src.services import profile_service
 router = APIRouter(prefix="/api", tags=["profile"])
 
 
-# ── Profile ──────────────────────────────────────────────
+# ── Resume Management (Multi-Profile) ─────────────────────
+
+@router.get("/resumes")
+def list_resumes(session: Session = Depends(get_session)):
+    """列出所有简历（含统计信息）。"""
+    return profile_service.list_profiles(session)
+
+
+@router.post("/resumes")
+def create_resume(data: dict = Body(...), session: Session = Depends(get_session)):
+    """创建新简历。"""
+    if not data.get("name"):
+        raise HTTPException(422, "name 为必填")
+    profile = profile_service.create_profile(session, data)
+    return _profile_out(profile, session)
+
+
+@router.put("/resumes/{profile_id}")
+def update_resume(profile_id: int, data: dict = Body(...), session: Session = Depends(get_session)):
+    """更新简历基本信息。"""
+    try:
+        profile = profile_service.update_profile(session, data, profile_id=profile_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _profile_out(profile, session)
+
+
+@router.delete("/resumes/{profile_id}")
+def delete_resume(profile_id: int, session: Session = Depends(get_session)):
+    """删除简历（禁止删除最后一个）。"""
+    try:
+        ok = profile_service.delete_profile(session, profile_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(404, "记录不存在")
+    return {"ok": True}
+
+
+@router.post("/resumes/{profile_id}/activate")
+def activate_resume(profile_id: int, session: Session = Depends(get_session)):
+    """激活指定简历。"""
+    try:
+        profile = profile_service.activate_profile(session, profile_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _profile_out(profile, session)
+
+
+@router.get("/profile/active")
+def get_active_profile_endpoint(session: Session = Depends(get_session)):
+    """获取当前活跃简历的完整数据。"""
+    profile = profile_service.get_active_profile(session)
+    return _profile_full(profile, session)
+
+
+# ── Profile (Backward Compatible) ──────────────────────────
 
 @router.get("/profile")
 def get_profile(session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     return _profile_out(profile, session)
 
 
 @router.put("/profile/{profile_id}")
 def update_profile_endpoint(profile_id: int, data: dict = Body(...), session: Session = Depends(get_session)):
-    return profile_service.update_profile(session, data)
+    try:
+        profile = profile_service.update_profile(session, data, profile_id=profile_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _profile_out(profile, session)
 
 
 # ── Experiences ──────────────────────────────────────────
 
 @router.get("/experiences")
 def list_experiences(type: str = "internship", session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     if type == "internship":
         items = profile_service.list_internships(session, profile.id)
         return [_internship_out(i) for i in items]
@@ -37,7 +97,7 @@ def list_experiences(type: str = "internship", session: Session = Depends(get_se
 
 @router.post("/experiences")
 def create_experience(type: str, data: dict, session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     if type == "internship":
         if not data.get("company") or not data.get("position"):
             raise HTTPException(422, "company 和 position 为必填")
@@ -72,13 +132,13 @@ def delete_experience(item_id: int, type: str, session: Session = Depends(get_se
 
 @router.get("/skills")
 def list_skills_endpoint(session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     return [_skill_out(s) for s in profile_service.list_skills(session, profile.id)]
 
 
 @router.post("/skills")
 def create_skill_endpoint(data: dict = Body(...), session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     if not data.get("category") or not data.get("name"):
         raise HTTPException(422, "category 和 name 为必填")
     return _skill_out(profile_service.create_skill(session, profile.id, data))
@@ -105,9 +165,20 @@ def _profile_out(p, s):
     import json
     return {
         "id": p.id, "name": p.name, "phone": p.phone, "email": p.email,
+        "is_active": p.is_active,
         "internship_count": len(profile_service.list_internships(s, p.id)),
         "project_count": len(profile_service.list_projects(s, p.id)),
         "skill_count": len(profile_service.list_skills(s, p.id)),
+    }
+
+def _profile_full(p, s):
+    """返回活跃简历的完整数据（含子表）。"""
+    import json
+    return {
+        "id": p.id, "name": p.name, "phone": p.phone, "email": p.email, "is_active": p.is_active,
+        "internships": [_internship_out(i) for i in profile_service.list_internships(s, p.id)],
+        "projects": [_project_out(pr) for pr in profile_service.list_projects(s, p.id)],
+        "skills": [_skill_out(sk) for sk in profile_service.list_skills(s, p.id)],
     }
 
 def _internship_out(i):

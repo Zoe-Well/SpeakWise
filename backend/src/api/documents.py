@@ -3,6 +3,7 @@
 import json
 import io
 import asyncio
+import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session
@@ -10,6 +11,8 @@ from sqlmodel import Session
 from backend.src.db.connection import get_session
 from backend.src.services import profile_service
 from backend.src.models.document import SourceDocument, ProfileUpdateProposal
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -19,9 +22,10 @@ async def upload_document(
     file: UploadFile = File(...),
     scope: str = Form("profile"),
     usage: str = Form("parse"),
+    clear_existing: bool = Form(False),
     session: Session = Depends(get_session),
 ):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     filename = file.filename or "unknown"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
@@ -59,16 +63,27 @@ async def upload_document(
 
     if usage == "parse" and extracted.strip():
         if scope == "profile":
-            proposals = await _llm_parse_resume(extracted)
+            try:
+                proposals = await _llm_parse_resume(extracted)
+            except Exception:
+                logger.exception("LLM 解析调用失败: doc_id=%d, filename=%s", doc.id, filename)
+                proposals = []
+                result["parse_error"] = "LLM 服务调用失败，请稍后重试"
+
             if proposals:
                 prop = ProfileUpdateProposal(
                     profile_id=profile.id, document_id=doc.id,
-                    changes=json.dumps(proposals, ensure_ascii=False), status="pending"
+                    changes=json.dumps(proposals, ensure_ascii=False), status="pending",
+                    clear_existing=clear_existing,
                 )
                 session.add(prop)
                 session.commit()
                 session.refresh(prop)
-                result["proposal"] = {"proposal_id": prop.id, "changes": proposals}
+                result["proposal"] = {"proposal_id": prop.id, "changes": proposals, "clear_existing": clear_existing}
+            elif "parse_error" not in result:
+                logger.info("LLM 解析未提取到字段: doc_id=%d, text_len=%d, filename=%s",
+                            doc.id, len(extracted), filename)
+                result["parse_detail"] = "no_fields"
         elif scope == "jd":
             # For JD docs: return extracted text so frontend can populate textarea
             result["extracted_text"] = extracted[:10000]
@@ -79,7 +94,7 @@ async def upload_document(
 @router.get("/documents")
 def list_documents(scope: str = None, session: Session = Depends(get_session)):
     """列出文档。scope 可选：不传返回所有，传 'profile' 或 'jd' 过滤。"""
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     from sqlmodel import select
     stmt = select(SourceDocument).where(SourceDocument.profile_id == profile.id)
     if scope:
@@ -92,7 +107,7 @@ def list_documents(scope: str = None, session: Session = Depends(get_session)):
 
 @router.delete("/documents/{doc_id}")
 def delete_document(doc_id: int, session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     doc = session.get(SourceDocument, doc_id)
     if not doc or doc.profile_id != profile.id:
         raise HTTPException(404)
@@ -101,10 +116,48 @@ def delete_document(doc_id: int, session: Session = Depends(get_session)):
     return {"ok": True}
 
 
+@router.post("/documents/{doc_id}/reparse")
+async def reparse_document(doc_id: int, session: Session = Depends(get_session)):
+    """对已有文档重新调用 LLM 解析（用于解析失败或结果不理想的文档）。"""
+    profile = profile_service.get_active_profile(session)
+    doc = session.get(SourceDocument, doc_id)
+    if not doc or doc.profile_id != profile.id:
+        raise HTTPException(404)
+    if not doc.extracted_text or not doc.extracted_text.strip():
+        raise HTTPException(400, "文档无已提取文本，无法重新解析")
+
+    logger.info("重新解析文档 doc_id=%d, filename=%s", doc.id, doc.filename)
+    proposals = await _llm_parse_resume(doc.extracted_text)
+
+    # 将旧 pending proposals 标记为 rejected
+    from sqlmodel import select as _sel
+    old_props = session.exec(_sel(ProfileUpdateProposal).where(
+        ProfileUpdateProposal.document_id == doc_id,
+        ProfileUpdateProposal.status == "pending"
+    )).all()
+    for op in old_props:
+        op.status = "rejected"
+        session.add(op)
+
+    if proposals:
+        prop = ProfileUpdateProposal(
+            profile_id=profile.id, document_id=doc.id,
+            changes=json.dumps(proposals, ensure_ascii=False), status="pending",
+        )
+        session.add(prop)
+        session.commit()
+        session.refresh(prop)
+        return {"proposal": {"proposal_id": prop.id, "changes": proposals}}
+    else:
+        session.commit()
+        logger.info("重新解析未提取到字段: doc_id=%d", doc.id)
+        return {"proposal": None, "message": "未提取到新字段"}
+
+
 @router.post("/documents/batch-delete")
 def batch_delete_documents(data: dict = Body(...), session: Session = Depends(get_session)):
     """批量删除文档。body: { ids: [1, 2, 3] }"""
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     ids = data.get("ids", [])
     deleted = 0
     for doc_id in ids:
@@ -116,10 +169,44 @@ def batch_delete_documents(data: dict = Body(...), session: Session = Depends(ge
     return {"deleted": deleted}
 
 
+# ── Material Selection (for Knowledge Selector) ──────────
+
+@router.get("/materials")
+def list_materials(scope: str = "profile", usage: str = "attach", session: Session = Depends(get_session)):
+    """列出可选择的素材文档（按 scope + usage 过滤）。"""
+    profile = profile_service.get_active_profile(session)
+    from sqlmodel import select
+    docs = session.exec(
+        select(SourceDocument)
+        .where(SourceDocument.profile_id == profile.id)
+        .where(SourceDocument.scope == scope)
+        .where(SourceDocument.usage == usage)
+        .order_by(SourceDocument.created_at.desc())
+    ).all()
+    return [{
+        "id": d.id, "filename": d.filename, "scope": d.scope, "usage": d.usage,
+        "file_type": d.file_type, "is_active": d.is_active,
+        "created_at": d.created_at.isoformat() if d.created_at else None,
+    } for d in docs]
+
+
+@router.put("/materials/{doc_id}/toggle")
+def toggle_material(doc_id: int, session: Session = Depends(get_session)):
+    """切换素材的 is_active 状态（多选）。"""
+    profile = profile_service.get_active_profile(session)
+    doc = session.get(SourceDocument, doc_id)
+    if not doc or doc.profile_id != profile.id:
+        raise HTTPException(404, "文档不存在")
+    doc.is_active = not doc.is_active
+    session.add(doc)
+    session.commit()
+    return {"ok": True, "id": doc.id, "is_active": doc.is_active}
+
+
 @router.get("/profile/proposals")
 def list_pending_proposals(session: Session = Depends(get_session)):
     """列出当前 profile 的待处理简历解析建议。"""
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     from sqlmodel import select as _sel
     rows = session.exec(_sel(ProfileUpdateProposal).where(
         ProfileUpdateProposal.profile_id == profile.id,
@@ -127,7 +214,7 @@ def list_pending_proposals(session: Session = Depends(get_session)):
     ).order_by(ProfileUpdateProposal.created_at.desc())).all()
     return [{"proposal_id": r.id, "document_id": r.document_id,
              "changes": json.loads(r.changes) if r.changes else [],
-             "status": r.status} for r in rows]
+             "status": r.status, "clear_existing": r.clear_existing} for r in rows]
 
 
 @router.post("/profile/merge")
@@ -137,6 +224,15 @@ def merge_proposal(data: dict, session: Session = Depends(get_session)):
     accepted_ids = set(data.get("accepted_change_ids", []))
     prop = session.get(ProfileUpdateProposal, proposal_id)
     if not prop: raise HTTPException(404)
+
+    # 如果上传时选择了"替换模式"，先清空现有实习/项目/技能
+    if prop.clear_existing:
+        from backend.src.models.profile import Internship, Project, Skill
+        from sqlmodel import delete as _del
+        for model in [Internship, Project, Skill]:
+            session.exec(_del(model).where(model.profile_id == prop.profile_id))
+        session.commit()
+        logger.info("替换模式: 已清空 profile_id=%d 的实习/项目/技能", prop.profile_id)
 
     changes = json.loads(prop.changes or "[]")
     applied = 0
@@ -187,8 +283,10 @@ async def _llm_parse_resume(text: str) -> list[dict]:
         if resp.startswith("```"):
             resp = resp.split("\n", 1)[-1].rsplit("```", 1)[0]
         data = _json.loads(resp)
-    except Exception:
+    except _json.JSONDecodeError:
+        logger.warning("LLM 简历解析返回了无效 JSON，原始响应前 200 字符: %s", resp[:200] if 'resp' in dir() else "N/A")
         return []
+    # 注意：llm_client.chat() 的网络/API 异常不在此捕获，向上传播到 upload_document 处理
 
     proposals = []
     idx = 0

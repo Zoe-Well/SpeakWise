@@ -19,7 +19,7 @@ const bundledExePath = path.join(process.resourcesPath || "", "backend", "speakw
 const isDev = !app.isPackaged && !fs.existsSync(bundledExePath);
 const FRONTEND_URL = isDev
   ? "http://localhost:5173"
-  : `file://${path.join(__dirname, "frontend", "dist", "index.html")}`;
+  : `file://${path.join(__dirname, "..", "..", "frontend", "dist", "index.html")}`;
 
 // ── Backend lifecycle ──────────────────────────────────────
 

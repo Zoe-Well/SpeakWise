@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Mic, MicOff, Send, Square } from "lucide-react";
 import { startListening, stopListening, type VoiceState } from "../lib/voiceInput";
-import { apiPost } from "../lib/api";
+import { apiPost, apiGet } from "../lib/api";
+import ApiKeyRequiredDialog from "./ApiKeyRequiredDialog";
 
 const COMMANDS = [
   { cmd: "/intro", desc: "生成自我介绍", hint: "/intro [要求]" },
@@ -24,6 +25,7 @@ export default function ChatInput({ onSend, onStop, generating }: Props) {
   const [activeIdx, setActiveIdx] = useState(0);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceText, setVoiceText] = useState("");
+  const [showVoiceDialog, setShowVoiceDialog] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const filtered = text.startsWith("/")
@@ -51,14 +53,26 @@ export default function ChatInput({ onSend, onStop, generating }: Props) {
       setVoiceState("idle");
       return;
     }
+    // Check if voice is configured
+    try {
+      const vc = await apiGet<{appid:string;api_key:string}>("/api/settings/voice");
+      if (!vc?.api_key) { setShowVoiceDialog(true); return; }
+    } catch { setShowVoiceDialog(true); return; }
+
     try {
       const { url, appid } = await apiPost<{url:string;appid:string}>("/api/settings/voice/auth-url", {});
+      // Accumulate recognized text (iFlytek streaming may send incremental partial results)
+      let accumulated = "";
       startListening(url, appid || "", {
-        onResult: (t, _isFinal) => { console.log("[voice] text:", t); setText(t); },
-        onStateChange: setVoiceState,
-        onError: (msg) => { alert(msg); setVoiceState("idle"); },
+        onResult: (t, isFinal) => {
+          console.log("[voice] text:", t, "final:", isFinal);
+          if (t.length > accumulated.length) { accumulated = t; }
+          setText(accumulated);
+        },
+        onStateChange: (s) => { setVoiceState(s); if (s === "idle") accumulated = ""; },
+        onError: (msg) => { alert(msg); setVoiceState("idle"); accumulated = ""; },
       });
-    } catch { alert("请先在设置中配置讯飞语音服务"); setVoiceState("idle"); }
+    } catch { alert("语音服务连接失败"); setVoiceState("idle"); }
   };
 
   return (
@@ -124,6 +138,14 @@ export default function ChatInput({ onSend, onStop, generating }: Props) {
           </button>
         )}
       </div>
+
+      <ApiKeyRequiredDialog
+        open={showVoiceDialog}
+        onClose={() => setShowVoiceDialog(false)}
+        featureName="语音输入"
+        serviceName="讯飞语音服务"
+        highlight="voice"
+      />
     </div>
   );
 }

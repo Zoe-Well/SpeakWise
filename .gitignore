@@ -32,4 +32,7 @@ chat.md
 jishu.md
 .claude/
 .specify/
+.agents/
+skills-lock.json
+preview/
 data/*.db

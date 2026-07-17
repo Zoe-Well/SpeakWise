@@ -1,9 +1,12 @@
-/** 岗位上下文页面 —— JD 输入 + 解析 + 文档导入 + 素材附加 */
+/** 岗位上下文页面 —— JD 输入 + 解析 + 文档导入 + 素材附加 + 多 JD 管理 */
 
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiDelete } from "../lib/api";
 import DocumentImport from "../components/DocumentImport";
+import ApiKeyRequiredDialog from "../components/ApiKeyRequiredDialog";
+import { useLLMStatus } from "../lib/useLLMStatus";
+import { useToast } from "../components/Toast";
 
 interface JDAnalysis {
   parse_status: string;
@@ -14,19 +17,35 @@ interface JDAnalysis {
   raw_text?: string;
 }
 
+interface JDItem {
+  id: number; name: string; is_active: boolean;
+  core_skills: string[]; duties: string[]; culture_values: string[];
+  created_at: string | null;
+}
+
 export default function JDPage({ activeSessionId }: { activeSessionId: number | null }) {
   const [jdText, setJdText] = useState("");
+  const [jdName, setJdName] = useState("");
   const [result, setResult] = useState<JDAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const qc = useQueryClient();
+  const toast = useToast();
+  const { isConfigured: llmConfigured } = useLLMStatus();
 
   const { data: jdDocs = [] } = useQuery<{id:number;filename:string}[]>({
     queryKey: ["documents","jd"],
     queryFn: () => apiGet("/api/documents?scope=jd"),
   });
 
-  // Load saved JD on mount
-  const { data: savedJd } = useQuery<{found:boolean;jd_context_id?:number;raw_text?:string;core_skills?:string[];duties?:string[];culture_values?:string[]}>({
+  // Load JD list for management
+  const { data: jdList = [] } = useQuery<JDItem[]>({
+    queryKey: ["jd-list"],
+    queryFn: () => apiGet("/api/jd/list"),
+  });
+
+  // Load saved active JD on mount
+  const { data: savedJd } = useQuery<{found:boolean;jd_context_id?:number;name?:string;raw_text?:string;core_skills?:string[];duties?:string[];culture_values?:string[]}>({
     queryKey: ["jd-latest"],
     queryFn: () => apiGet("/api/jd/latest"),
   });
@@ -58,13 +77,16 @@ export default function JDPage({ activeSessionId }: { activeSessionId: number | 
 
   const analyze = async () => {
     if (!jdText.trim()) return;
+    if (!llmConfigured) { setShowApiKeyDialog(true); return; }
     setLoading(true);
     try {
       const body: Record<string, unknown> = { raw_text: jdText };
+      if (jdName.trim()) body.name = jdName.trim();
       if (activeSessionId) body.session_id = activeSessionId;
       const data = await apiPost<JDAnalysis>("/api/jd/analyze", body);
       setResult(data);
       qc.invalidateQueries({ queryKey: ["jd-latest"] });
+      qc.invalidateQueries({ queryKey: ["jd-list"] });
     } catch {
       setResult({ parse_status: "failed", core_skills: [], duties: [], culture_values: [], error: "网络错误" });
     }
@@ -88,14 +110,37 @@ export default function JDPage({ activeSessionId }: { activeSessionId: number | 
     setLoading(true);
     try {
       const body: Record<string, unknown> = { raw_text: text };
+      if (jdName.trim()) body.name = jdName.trim();
       if (activeSessionId) body.session_id = activeSessionId;
       const data = await apiPost<JDAnalysis>("/api/jd/analyze", body);
       setResult(data);
       qc.invalidateQueries({ queryKey: ["jd-latest"] });
+      qc.invalidateQueries({ queryKey: ["jd-list"] });
     } catch {
       setResult({ parse_status: "failed", core_skills: [], duties: [], culture_values: [], error: "网络错误" });
     }
     setLoading(false);
+  };
+
+  // ── JD management handlers ──
+  const handleActivateJD = async (id: number) => {
+    try {
+      await apiPost(`/api/jd/${id}/activate`);
+      qc.invalidateQueries({ queryKey: ["jd-list"] });
+      qc.invalidateQueries({ queryKey: ["jd-latest"] });
+      toast.success("JD 已切换");
+    } catch { toast.error("切换失败"); }
+  };
+
+  const handleDeleteJD = async (id: number) => {
+    const item = jdList.find(j => j.id === id);
+    if (!confirm(`确定删除「${item?.name || `JD #${id}`}」？`)) return;
+    try {
+      await apiDelete(`/api/jd/${id}`);
+      qc.invalidateQueries({ queryKey: ["jd-list"] });
+      qc.invalidateQueries({ queryKey: ["jd-latest"] });
+      toast.success("已删除");
+    } catch { toast.error("删除失败"); }
   };
 
   return (
@@ -108,10 +153,13 @@ export default function JDPage({ activeSessionId }: { activeSessionId: number | 
         <h3 className="font-semibold mb-3">📥 文档导入</h3>
         <div className="flex gap-4 mb-3">
           <div className="flex-1">
-            <DocumentImport scope="jd" usage="parse" onSuccess={handleDocParsed} />
+            <DocumentImport scope="jd" usage="parse" onSuccess={handleDocParsed}
+              llmConfigured={llmConfigured} onApiKeyRequired={() => setShowApiKeyDialog(true)} />
           </div>
           <div className="flex-1">
-            <DocumentImport scope="jd" usage="attach" onSuccess={() => qc.invalidateQueries({ queryKey: ["documents","jd"] })} />
+            <DocumentImport scope="jd" usage="attach"
+              onSuccess={() => qc.invalidateQueries({ queryKey: ["documents","jd"] })}
+              llmConfigured={llmConfigured} onApiKeyRequired={() => setShowApiKeyDialog(true)} />
           </div>
         </div>
         {jdDocs.length > 0 && (
@@ -130,6 +178,14 @@ export default function JDPage({ activeSessionId }: { activeSessionId: number | 
       {/* JD 文本输入 */}
       <section className="bg-white border border-zinc-200 rounded-xl p-5 mb-5">
         <h3 className="font-semibold mb-3">📝 岗位描述</h3>
+        <div className="flex gap-3 mb-3">
+          <input
+            className="border border-zinc-200 rounded-lg px-3 py-2 text-sm w-48"
+            value={jdName}
+            onChange={(e) => setJdName(e.target.value)}
+            placeholder="JD 名称（可选）"
+          />
+        </div>
         <textarea
           rows={7}
           className="w-full border border-zinc-200 rounded-lg p-3 text-sm"
@@ -147,6 +203,42 @@ export default function JDPage({ activeSessionId }: { activeSessionId: number | 
           </button>
         </div>
       </section>
+
+      {/* ── Saved JD List ── */}
+      {jdList.length > 0 && (
+        <section className="bg-white border border-zinc-200 rounded-xl p-5 mb-5">
+          <h3 className="font-semibold mb-3">📋 已保存的岗位 ({jdList.length})</h3>
+          <div className="space-y-2">
+            {jdList.map(j => (
+              <div key={j.id} className={`flex items-center justify-between text-sm border rounded-lg px-3 py-2 ${
+                j.is_active ? "border-indigo-300 bg-indigo-50" : "border-zinc-100 hover:bg-zinc-50"
+              }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-medium truncate">{j.name || `JD #${j.id}`}</span>
+                  <span className="text-xs text-zinc-400 flex-shrink-0">
+                    {j.core_skills.length}技能·{j.duties.length}职责
+                  </span>
+                  {j.is_active && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600 font-medium flex-shrink-0">当前使用</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                  {!j.is_active && (
+                    <button onClick={() => handleActivateJD(j.id)}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded px-2 py-0.5 hover:bg-indigo-50">
+                      使用
+                    </button>
+                  )}
+                  <button onClick={() => handleDeleteJD(j.id)}
+                    className="text-xs text-zinc-400 hover:text-red-500 border border-zinc-200 rounded px-2 py-0.5 hover:border-red-200">
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* 解析结果 */}
       {result && (
@@ -178,6 +270,12 @@ export default function JDPage({ activeSessionId }: { activeSessionId: number | 
           )}
         </section>
       )}
+      <ApiKeyRequiredDialog
+        open={showApiKeyDialog}
+        onClose={() => setShowApiKeyDialog(false)}
+        featureName="JD 分析"
+        highlight="llm"
+      />
     </div>
   );
 }

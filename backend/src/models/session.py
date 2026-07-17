@@ -11,7 +11,7 @@ class ConversationSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     profile_id: int
     name: str = Field(max_length=200)
-    mode: str = Field(default="interview", max_length=20)  # "normal" | "interview"
+    mode: str = Field(default="interview", max_length=20)  # "normal" | "interview" | "mock"
     jd_context_id: Optional[int] = Field(default=None, nullable=True)
     active_template_id: Optional[str] = Field(default=None, max_length=100)
     created_at: datetime = Field(default_factory=datetime.utcnow)

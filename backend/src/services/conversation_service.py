@@ -203,32 +203,53 @@ def _parse_template_rules(t) -> dict:
     return rules
 
 
-def _build_context(db, session_id: int) -> str:
-    """从数据库加载最近对话历史，组装为上下文字符串。
+def _get_recent_messages(db, session_id: int, limit: int = 6) -> list[dict]:
+    """获取最近 N 条历史消息，以原生 role 格式返回。
 
-    最近 5 条消息保留完整内容，更早的消息截断到 400 字。
+    排除最新一条（当前触发请求的 user message），返回之前
+    的 user/assistant 对，供 prompt 直接使用。
     """
+    from backend.src.models.session import Message as Msg
+    from sqlmodel import select as _sel
+    msgs = db.exec(
+        _sel(Msg).where(Msg.session_id == session_id)
+        .order_by(Msg.created_at.desc()).limit(limit + 1)  # +1 to skip current
+    ).all()
+    msgs = list(reversed(msgs))  # chronological
+
+    if not msgs:
+        return []
+
+    # Skip the most recent message (the one just saved by generate.py)
+    history = msgs[:-1] if len(msgs) > 1 else []
+
+    return [
+        {"role": m.role, "content": m.content}
+        for m in history[-limit:]
+        if m.content.strip()
+    ]
+
+
+def _build_context(db, session_id: int) -> str:
+    """从数据库加载对话历史，组装为纯文本（保留给 _build_free_text_context 用）。"""
     from backend.src.models.session import Message as Msg
     from sqlmodel import select as _sel
     msgs = db.exec(
         _sel(Msg).where(Msg.session_id == session_id)
         .order_by(Msg.created_at.desc()).limit(80)
     ).all()
-    msgs = list(reversed(msgs))  # chronological order
+    msgs = list(reversed(msgs))
 
     if not msgs:
         return ""
 
     recent = msgs[-30:]
     lines = ["【对话历史】"]
-    full_keep = 10  # 最近 10 条保留完整内容
+    full_keep = 10
     for i, m in enumerate(recent):
         role = "用户" if m.role == "user" else "助手"
         is_recent = i >= len(recent) - full_keep
-        if is_recent:
-            txt = m.content
-        else:
-            txt = m.content[:400] + ("…" if len(m.content) > 400 else "")
+        txt = m.content if is_recent else m.content[:400] + ("…" if len(m.content) > 400 else "")
         if txt.strip():
             lines.append(f"{role}: {txt}")
 
@@ -276,19 +297,20 @@ async def handle_message(
         yield {"type": "meta", "model": model, "fast_mode": not is_interview_rel}  # type: ignore[misc]
 
         if is_interview_rel:
-            # Auto-upgrade: if content is interview-related, use full context anyway
             sys_msg = "你是资深面试教练。基于用户简历、岗位信息和对话历史，帮用户打磨面试回答。"
             user_msg = _build_free_text_context(profile_data, jd_analysis, content, context)
+            messages = [{"role": "system", "content": sys_msg}]
+            if db:
+                messages += _get_recent_messages(db, session_id)
+            messages.append({"role": "user", "content": user_msg})
         else:
             sys_msg = "你是一个有用的AI助手。回答简洁直接。"
-            user_msg = content
-            if context:
-                user_msg = f"【对话历史】\n{context}\n\n【当前问题】\n{content}"
+            messages = [{"role": "system", "content": sys_msg}]
+            if db and context:
+                messages += _get_recent_messages(db, session_id)
+            messages.append({"role": "user", "content": content})
 
-        async for chunk in _native_thinking_stream([
-            {"role": "system", "content": sys_msg},
-            {"role": "user", "content": user_msg},
-        ], temperature=0.5, model=model):
+        async for chunk in _native_thinking_stream(messages, temperature=0.5, model=model):
             yield chunk
         return
 
@@ -297,85 +319,91 @@ async def handle_message(
     yield {"type": "meta", "model": model, "fast_mode": False}  # type: ignore[misc]
 
     # Auto-classify intent if no explicit command
-    explicit_command = bool(command)  # True = user typed /xxx, False = auto-classified
+    explicit_command = bool(command)
     effective_command = command or classify_interview_intent(content)
+    recent_msgs = _get_recent_messages(db, session_id) if db else []
 
     if effective_command == "/intro":
         extra = content.replace("/intro", "").strip() if explicit_command else content.strip()
         messages = build_intro_messages(profile_data, jd_analysis, extra, template_rules)
-        if context:
-            messages.insert(-1, {"role": "system", "content": f"这是本次面试准备对话的历史记录，请参考已讨论过的内容避免重复：\n{context}"})
+        # Insert history as native role messages before the final user message
+        if recent_msgs:
+            messages = messages[:-1] + recent_msgs + [messages[-1]]
         async for chunk in _native_thinking_stream(messages, temperature=0.4, model=model):
             yield chunk
 
     elif effective_command == "/scenario":
         question = content.replace("/scenario", "").strip() if explicit_command else content.strip()
         messages = build_scenario_messages(profile_data, question, jd_analysis, template_rules)
-        if context:
-            messages.insert(-1, {"role": "system", "content": f"对话历史（参考已讨论经历，避免重复使用相同案例）：\n{context}"})
+        if recent_msgs:
+            messages = messages[:-1] + recent_msgs + [messages[-1]]
         async for chunk in _native_thinking_stream(messages, temperature=0.4, model=model):
             yield chunk
 
     elif effective_command == "/followup":
         base = "你是一个有经验的面试官。"
         profile_summary = _build_profile_summary(profile_data, jd_analysis)
-        if context:
-            base += f"\n【用户背景】{profile_summary}\n基于以下对话历史，提出一个自然的追问。\n{context}"
+        base += f"\n【用户背景】{profile_summary}"
+        if recent_msgs:
+            base += "\n基于以上对话历史，提出一个自然的追问。"
         else:
-            base += f"\n【用户背景】{profile_summary}\n基于以上面试准备对话，生成一个面试官可能追问的、有挑战性的问题。"
+            base += "\n基于以上面试准备对话，生成一个面试官可能追问的、有挑战性的问题。"
         user_extra = "只输出追问问题本身，不加前缀。"
         if template_rules:
             if template_rules.get("structure"):
                 user_extra += f"\n用户指定的结构规则：{template_rules['structure']}"
             if template_rules.get("style"):
                 user_extra += f"\n用户指定的风格规则：{template_rules['style']}"
-        async for chunk in _native_thinking_stream([
-            {"role": "system", "content": base},
-            {"role": "user", "content": user_extra},
-        ], temperature=0.6, model=model):
+        followup_msgs = [{"role": "system", "content": base}]
+        if recent_msgs:
+            followup_msgs += recent_msgs
+        followup_msgs.append({"role": "user", "content": user_extra})
+        async for chunk in _native_thinking_stream(followup_msgs, temperature=0.6, model=model):
             yield chunk
 
     elif effective_command == "/technical":
         question = content.replace("/technical", "").strip() if explicit_command else content.strip()
         messages = build_technical_messages(profile_data, question, jd_analysis, template_rules)
-        if context:
-            messages.insert(-1, {"role": "system", "content": f"对话历史（参考已讨论过的技术点，避免重复）：\n{context}"})
+        if recent_msgs:
+            messages = messages[:-1] + recent_msgs + [messages[-1]]
         async for chunk in _native_thinking_stream(messages, temperature=0.4, model=model):
             yield chunk
 
     else:
         # No clear intent → general interview coaching with full context
-        sys_msg = "你是资深面试教练。基于用户提供的简历、岗位信息和知识库，回答用户关于面试、技术、职业发展等方面的问题。回答要具体、有针对性，引用用户的真实经历和技能。"
+        sys_msg = "你是资深面试教练。基于用户提供的简历、岗位信息和知识库，回答用户关于面试、技术、职业发展等方面的问题。回答要具体、有针对性，引用用户的真实经历和技能。如果你之前已经回答过类似的问题，请在之前回答的基础上优化调整，无需从零重新生成。"
         user_msg = _build_free_text_context(profile_data, jd_analysis, content, context)
         if template_rules:
             if template_rules.get("structure"):
                 user_msg += f"\n用户指定的结构规则：{template_rules['structure']}"
             if template_rules.get("style"):
                 user_msg += f"\n用户指定的风格规则：{template_rules['style']}"
-        async for chunk in _native_thinking_stream([
-            {"role": "system", "content": sys_msg},
-            {"role": "user", "content": user_msg},
-        ], temperature=0.5, model=model):
+        messages = [{"role": "system", "content": sys_msg}]
+        if recent_msgs:
+            messages += recent_msgs
+        messages.append({"role": "user", "content": user_msg})
+        async for chunk in _native_thinking_stream(messages, temperature=0.5, model=model):
             yield chunk
 
 
-def build_profile_data_for_prompt(db: Session) -> dict:
-    """从数据库组装 profile_data + 附加文档文本用于 Prompt 注入。"""
+def build_profile_data_for_prompt(db: Session, profile_id: int = 1) -> dict:
+    """从数据库组装 profile_data + 附加文档文本用于 Prompt 注入（仅加载 is_active=True 的数据）。"""
     import json as _json
     from backend.src.models.document import SourceDocument
     from sqlmodel import select as _sel
 
-    profile = profile_service.get_or_create_profile(db)
+    profile = db.get(profile_service.UserProfile, profile_id) or profile_service.get_or_create_profile(db)
     internships = profile_service.list_internships(db, profile.id)
     projects = profile_service.list_projects(db, profile.id)
     skills_list = profile_service.list_skills(db, profile.id)
 
-    # Load attached documents (usage="attach") for both scopes
+    # Load active attached documents
     profile_docs = db.exec(
         _sel(SourceDocument)
         .where(SourceDocument.profile_id == profile.id)
         .where(SourceDocument.scope == "profile")
         .where(SourceDocument.usage == "attach")
+        .where(SourceDocument.is_active == True)  # type: ignore[arg-type]
         .where(SourceDocument.extracted_text.isnot(None))  # type: ignore[arg-type]
     ).all()
     jd_docs = db.exec(
@@ -383,6 +411,7 @@ def build_profile_data_for_prompt(db: Session) -> dict:
         .where(SourceDocument.profile_id == profile.id)
         .where(SourceDocument.scope == "jd")
         .where(SourceDocument.usage == "attach")
+        .where(SourceDocument.is_active == True)  # type: ignore[arg-type]
         .where(SourceDocument.extracted_text.isnot(None))  # type: ignore[arg-type]
     ).all()
 

@@ -16,6 +16,7 @@ class SourceDocument(SQLModel, table=True):
     file_type: str = Field(max_length=20)  # txt | docx | doc | pdf
     extracted_text: Optional[str] = Field(default=None, max_length=50000)
     parse_status: str = Field(default="pending", max_length=20)  # pending | success | failed
+    is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -27,4 +28,5 @@ class ProfileUpdateProposal(SQLModel, table=True):
     document_id: int = Field(foreign_key="source_documents.id")
     changes: str = Field(default="[]", max_length=10000)  # JSON
     status: str = Field(default="pending", max_length=20)  # pending | confirmed | rejected
+    clear_existing: bool = Field(default=False)  # 确认时是否先清空现有实习/项目/技能
     created_at: datetime = Field(default_factory=datetime.utcnow)

@@ -11,10 +11,12 @@ class JobContext(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     profile_id: int
+    name: str = Field(default="", max_length=200)
     raw_text: str = Field(default="")
     core_skills: str = Field(default="[]")  # JSON array
     duties: str = Field(default="[]")       # JSON array
     culture_values: str = Field(default="[]")  # JSON array
+    is_active: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     def to_analysis_dict(self) -> dict:

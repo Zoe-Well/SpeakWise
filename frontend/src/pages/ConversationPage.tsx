@@ -5,8 +5,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiDelete } from "../lib/api";
 import { consumeGenerateStream } from "../lib/streamConsumer";
 import SessionSelector from "../components/SessionSelector";
+import KnowledgeSelector from "../components/KnowledgeSelector";
 import MessageBubble from "../components/MessageBubble";
 import ChatInput from "../components/ChatInput";
+import ApiKeyRequiredDialog from "../components/ApiKeyRequiredDialog";
 import { useToast } from "../components/Toast";
 
 interface Message {
@@ -30,15 +32,17 @@ export default function ConversationPage({ activeSessionId, onSessionChange }: P
   const [streamType, setStreamType] = useState<string>("");
   const [thinkingText, setThinkingText] = useState("");
   const [fastMode, setFastMode] = useState(false);
+  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const msgEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const qc = useQueryClient();
 
-  // Auto-select first session
-  const { data: sessions = [] } = useQuery<{ id: number; name: string }[]>({
+  // Auto-select first non-mock session
+  const { data: allSessions = [] } = useQuery<{ id: number; name: string; mode?: string }[]>({
     queryKey: ["sessions"],
     queryFn: () => apiGet("/api/sessions"),
   });
+  const sessions = allSessions.filter(s => s.mode !== "mock");
   useEffect(() => {
     if (!activeSessionId && sessions.length > 0) onSessionChange(sessions[0].id);
   }, [sessions, activeSessionId]);
@@ -67,9 +71,17 @@ export default function ConversationPage({ activeSessionId, onSessionChange }: P
     setIsNearBottom(dist < 80);
   }, []);
 
+  // Check if API key is configured (must be before handleSend for closure)
+  const { data: llmSettings } = useQuery<{ provider: string; api_key: string; model: string }>({
+    queryKey: ["settings", "llm"],
+    queryFn: () => apiGet("/api/settings/llm"),
+  });
+  const hasApiKey = !!(llmSettings?.api_key);
+
   const handleSend = useCallback(
     async (text: string) => {
       if (generating) return;
+      if (!hasApiKey) { setShowApiKeyDialog(true); return; }
       // Auto-create session if none exists
       let sid = activeSessionId;
       if (!sid) {
@@ -173,7 +185,7 @@ export default function ConversationPage({ activeSessionId, onSessionChange }: P
         abortRef.current = null;
       }
     },
-    [activeSessionId, generating, qc, refetchMsgs]
+    [activeSessionId, generating, qc, refetchMsgs, hasApiKey]
   );
 
   const handleStop = useCallback(() => {
@@ -226,13 +238,6 @@ export default function ConversationPage({ activeSessionId, onSessionChange }: P
   const hasProfile = !!(profileStatus && (profileStatus.skill_count > 0 || profileStatus.project_count > 0));
   const hasJD = !!(jdStatus?.found);
 
-  // Check if API key is configured
-  const { data: llmSettings } = useQuery<{ provider: string; api_key: string; model: string }>({
-    queryKey: ["settings", "llm"],
-    queryFn: () => apiGet("/api/settings/llm"),
-  });
-  const hasApiKey = !!(llmSettings?.api_key);
-
   return (
     <div className="flex flex-col h-full">
       {/* Top toolbar */}
@@ -263,6 +268,9 @@ export default function ConversationPage({ activeSessionId, onSessionChange }: P
           </button>
         )}
       </div>
+
+      {/* Knowledge Selector — resume / JD / materials */}
+      <KnowledgeSelector />
 
       {/* Messages area */}
       <div className="flex-1 overflow-auto px-6 py-5" ref={msgContainerRef} onScroll={handleScroll}>
@@ -328,6 +336,13 @@ export default function ConversationPage({ activeSessionId, onSessionChange }: P
       <div className="px-6 py-3 border-t border-zinc-200 bg-white">
         <ChatInput onSend={handleSend} generating={generating} onStop={handleStop} />
       </div>
+
+      <ApiKeyRequiredDialog
+        open={showApiKeyDialog}
+        onClose={() => setShowApiKeyDialog(false)}
+        featureName="对话"
+        highlight="llm"
+      />
     </div>
   );
 }

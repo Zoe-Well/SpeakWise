@@ -23,30 +23,34 @@ BUILTIN_TEMPLATES = [
 ]
 
 
-def _seed_builtins(session: Session, profile_id: int):
+def _seed_builtins(session: Session):
+    """确保内置模板存在（全局，profile_id=0）。"""
     for bt in BUILTIN_TEMPLATES:
         existing = session.get(PromptTemplate, bt["id"])
-        if not existing:
-            session.add(PromptTemplate(profile_id=profile_id, **bt))
+        if existing:
+            # 修复孤儿数据：如果 profile_id 不是 0，更新为 0
+            if existing.profile_id != 0:
+                existing.profile_id = 0
+                session.add(existing)
+        else:
+            session.add(PromptTemplate(profile_id=0, **bt))
     session.commit()
 
 
 @router.get("/prompt-templates")
 def list_templates(scope: str = None, session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
-    _seed_builtins(session, profile.id)
-    stmt = select(PromptTemplate).where(PromptTemplate.profile_id == profile.id)
+    _seed_builtins(session)
+    stmt = select(PromptTemplate)
     if scope: stmt = stmt.where(PromptTemplate.scope == scope)
     return [_tpl_out(t) for t in session.exec(stmt).all()]
 
 
 @router.post("/prompt-templates")
 def create_template(data: dict = Body(...), session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
     tid = f"ct_{int(__import__('time').time() * 1000)}"
     structure = _validate_template_rules(data.get("structure_rules"), "structure_rules")
     style = _validate_template_rules(data.get("style_rules"), "style_rules")
-    t = PromptTemplate(profile_id=profile.id, id=tid, scope=data.get("scope", "self_intro"),
+    t = PromptTemplate(profile_id=0, id=tid, scope=data.get("scope", "self_intro"),
                        name=data.get("name", "新模板"), is_builtin=False,
                        structure_rules=structure, style_rules=style)
     session.add(t); session.commit(); session.refresh(t)
@@ -87,7 +91,7 @@ def update_template(template_id: str, data: dict, session: Session = Depends(get
         # Copy-on-edit
         import time
         new_id = f"ct_{int(time.time() * 1000)}"
-        new_t = PromptTemplate(profile_id=t.profile_id, id=new_id, scope=t.scope,
+        new_t = PromptTemplate(profile_id=0, id=new_id, scope=t.scope,
                                name=f"{t.name} (副本)", is_builtin=False,
                                structure_rules=data.get("structure_rules", t.structure_rules),
                                style_rules=data.get("style_rules", t.style_rules))
@@ -136,12 +140,11 @@ def _validate_template_rules(value: str | None, field_name: str) -> str | None:
 
 @router.post("/prompt-templates/import")
 def import_template(data: dict = Body(...), session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
     import time
     tid = f"imp_{int(time.time() * 1000)}"
     structure = _validate_template_rules(data.get("structure_rules"), "structure_rules")
     style = _validate_template_rules(data.get("style_rules"), "style_rules")
-    t = PromptTemplate(profile_id=profile.id, id=tid, is_builtin=False,
+    t = PromptTemplate(profile_id=0, id=tid, is_builtin=False,
                        scope=data.get("scope", "self_intro"), name=data.get("name", "导入模板"),
                        structure_rules=structure, style_rules=style)
     session.add(t); session.commit(); session.refresh(t)

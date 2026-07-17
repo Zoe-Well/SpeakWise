@@ -56,56 +56,47 @@ async def validate_llm_key(data: dict = Body(...)):
     client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=25.0)
     models = _KNOWN_MODELS.get(provider_key, [])
 
-    # Validate key: try a minimal chat completion directly (faster than /models)
-    key_valid = False
-    try:
-        test_model = models[0] if models else "deepseek-chat"
-        await client.chat.completions.create(
-            model=test_model, messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1, temperature=0, stream=False,
-        )
-        key_valid = True
-    except Exception as e:
-        msg = str(e).lower()
-        if any(w in msg for w in ["401", "403", "unauthorized", "invalid", "incorrect", "authentication"]):
-            raise HTTPException(401, "API Key 无效或没有权限")
-        # Try with the other model name as fallback
-        alt_model = models[1] if len(models) > 1 else None
-        if alt_model:
-            try:
-                alt_client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=25.0)
-                await alt_client.chat.completions.create(
-                    model=alt_model, messages=[{"role": "user", "content": "hi"}],
-                    max_tokens=1, temperature=0, stream=False,
-                )
-                key_valid = True
-            except Exception as e2:
-                msg2 = str(e2).lower()
-                if any(w in msg2 for w in ["401", "403", "unauthorized", "invalid", "incorrect", "authentication"]):
-                    raise HTTPException(401, "API Key 无效或没有权限")
-                raise HTTPException(400, f"验证失败: {e2}")
-        if not key_valid:
-            raise HTTPException(400, f"验证失败: {e}")
+    # Validate key by trying each model in sequence (first success → valid)
+    errors = []
+    for model_name in models:
+        try:
+            await client.chat.completions.create(
+                model=model_name, messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1, temperature=0, stream=False,
+            )
+            return {"valid": True, "models": models}
+        except Exception as e:
+            msg = str(e)
+            errors.append(f"{model_name}: {msg}")
+            # If it's genuinely an auth error (not model-not-found, not network), fail fast
+            msg_lower = msg.lower()
+            if any(w in msg_lower for w in ["401", "403", "unauthorized"]):
+                raise HTTPException(401, f"API Key 无效或没有权限 → {msg[:200]}")
+            # For other errors (network, SSL, model name), try next model
 
-    if not key_valid:
-        raise HTTPException(400, "无法验证 API Key，请检查网络连接")
-
-    return {"valid": True, "models": models}
+    # All models failed
+    raise HTTPException(400, f"所有模型均验证失败: {'; '.join(errors[-3:])}")
 
 
 @router.get("/settings/llm")
 def get_llm_settings(session: Session = Depends(get_session)):
-    """获取当前 LLM 配置。"""
-    profile = profile_service.get_or_create_profile(session)
-    ds = session.exec(select(DisplaySettings).where(DisplaySettings.profile_id == profile.id)).first()
-    if not ds:
-        return {"provider": "deepseek", "api_key": "", "model": ""}
+    """获取当前 LLM 配置（统一通过 get_active_apikey，兼容多 Key 系统和旧 DisplaySettings）。"""
+    key_info = get_active_apikey(session)
     return {
-        "provider": ds.llm_provider or "deepseek",
-        "api_key": ds.llm_api_key or "",
-        "model": ds.llm_model or "",
+        "provider": key_info["provider"] if key_info else "deepseek",
+        "api_key": key_info["api_key"] if key_info else "",
+        "model": key_info.get("model", "") if key_info else "",
         "data_dir": _get_data_dir(),
     }
+
+
+@router.get("/settings/llm/status")
+def get_llm_status(session: Session = Depends(get_session)):
+    """检查 LLM 是否已配置（快速检查，不实际调用 LLM）。"""
+    key_info = get_active_apikey(session)
+    if key_info and key_info.get("api_key"):
+        return {"configured": True, "provider": key_info.get("provider", "")}
+    return {"configured": False, "provider": ""}
 
 
 @router.put("/settings/llm")
@@ -158,10 +149,27 @@ def get_data_dir(session: Session = Depends(get_session)):
 
 # ── API Key 管理（多 Key 支持）──
 
+async def _validate_key(provider_key: str, api_key: str) -> None:
+    """验证 API Key 有效性。无效时抛出 HTTPException。"""
+    provider = LLM_PROVIDERS.get(provider_key)
+    if not provider:
+        raise HTTPException(400, f"不支持的厂商: {provider_key}")
+    client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=25.0)
+    try:
+        await client.chat.completions.create(
+            model="deepseek-chat", messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1, temperature=0, stream=False,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if any(w in msg for w in ["401","403","unauthorized","invalid","incorrect","authentication"]):
+            raise HTTPException(401, "API Key 无效或已失效")
+        raise HTTPException(400, f"验证失败: {str(e)[:200]}")
+
+
 @router.get("/settings/apikeys")
 def list_apikeys(session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
-    rows = session.exec(select(ApiKey).where(ApiKey.profile_id == profile.id).order_by(ApiKey.created_at.desc())).all()
+    rows = session.exec(select(ApiKey).order_by(ApiKey.created_at.desc())).all()
     return [{"id": r.id, "provider": r.provider, "name": r.name,
              "api_key": r.api_key[:8] + "..." if r.api_key else "",
              "model": r.model, "is_active": r.is_active,
@@ -169,21 +177,39 @@ def list_apikeys(session: Session = Depends(get_session)):
 
 
 @router.post("/settings/apikeys")
-def add_apikey(data: dict = Body(...), session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
-    k = ApiKey(profile_id=profile.id, provider=data.get("provider", "deepseek"),
-               name=data.get("name", ""), api_key=data.get("api_key", ""),
-               model=data.get("model", ""))
+async def add_apikey(data: dict = Body(...), session: Session = Depends(get_session)):
+    """添加 API Key（去重 + 验证 + 首个 Key 自动激活）。"""
+    provider_key = data.get("provider", "deepseek")
+    api_key = data.get("api_key", "").strip()
+    if not api_key:
+        raise HTTPException(400, "API Key 不能为空")
+
+    # 1. 去重：Key 值
+    if session.exec(select(ApiKey).where(ApiKey.api_key == api_key)).first():
+        raise HTTPException(409, "该 API Key 已存在，无需重复添加")
+    # 2. 去重：名称
+    name = data.get("name", "").strip()
+    if name and session.exec(select(ApiKey).where(ApiKey.name == name)).first():
+        raise HTTPException(409, f"名称「{name}」已被使用，请更换名称")
+
+    # 2. 验证有效性
+    await _validate_key(provider_key, api_key)
+
+    # 3. 如果是第一个 Key，自动激活
+    is_first = session.exec(select(ApiKey)).first() is None
+
+    k = ApiKey(profile_id=0, provider=provider_key,
+               name=name, api_key=api_key,
+               model=data.get("model", ""), is_active=is_first)
     session.add(k); session.commit(); session.refresh(k)
-    return {"id": k.id, "name": k.name, "provider": k.provider, "model": k.model}
+    return {"id": k.id, "name": k.name, "provider": k.provider, "model": k.model, "is_active": k.is_active}
 
 
 @router.put("/settings/apikeys/{key_id}")
 def update_apikey(key_id: int, data: dict = Body(...), session: Session = Depends(get_session)):
     """更新 Key（model 字段）。"""
-    profile = profile_service.get_or_create_profile(session)
     k = session.get(ApiKey, key_id)
-    if not k or k.profile_id != profile.id:
+    if not k:
         raise HTTPException(404)
     if "model" in data:
         k.model = data["model"]
@@ -192,14 +218,19 @@ def update_apikey(key_id: int, data: dict = Body(...), session: Session = Depend
 
 
 @router.put("/settings/apikeys/{key_id}/activate")
-def activate_apikey(key_id: int, data: dict = Body(...), session: Session = Depends(get_session)):
-    """激活 Key，同时保存 model。body: { model? }"""
-    profile = profile_service.get_or_create_profile(session)
-    for r in session.exec(select(ApiKey).where(ApiKey.profile_id == profile.id)).all():
-        r.is_active = False; session.add(r)
+async def activate_apikey(key_id: int, data: dict = Body(...), session: Session = Depends(get_session)):
+    """激活 Key（先验证有效性）。body: { model? }"""
     k = session.get(ApiKey, key_id)
-    if not k or k.profile_id != profile.id:
+    if not k:
         raise HTTPException(404)
+
+    # 验证 Key 仍然有效
+    await _validate_key(k.provider, k.api_key)
+
+    # 全量 deactivate
+    for r in session.exec(select(ApiKey)).all():
+        r.is_active = False; session.add(r)
+    # 激活目标
     k.is_active = True
     if "model" in data:
         k.model = data["model"]
@@ -210,45 +241,39 @@ def activate_apikey(key_id: int, data: dict = Body(...), session: Session = Depe
 @router.post("/settings/apikeys/{key_id}/validate")
 async def validate_stored_key(key_id: int, session: Session = Depends(get_session)):
     """使用已存储的 Key 验证有效性并返回模型列表。"""
-    profile = profile_service.get_or_create_profile(session)
     k = session.get(ApiKey, key_id)
-    if not k or k.profile_id != profile.id:
+    if not k:
         raise HTTPException(404)
-    provider = LLM_PROVIDERS.get(k.provider)
-    if not provider:
-        raise HTTPException(400, f"不支持的厂商: {k.provider}")
-    client = AsyncOpenAI(api_key=k.api_key, base_url=provider["base_url"], timeout=30.0)
-    models = _KNOWN_MODELS.get(k.provider, [])
-    try:
-        # Try the cheapest model first to validate
-        test_model = models[-1] if len(models) > 1 else models[0] if models else "deepseek-chat"
-        await client.chat.completions.create(
-            model=test_model, messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1, temperature=0, stream=False,
-        )
-        return {"valid": True, "models": _KNOWN_MODELS.get(k.provider, [])}
-    except Exception as e:
-        msg = str(e).lower()
-        if any(w in msg for w in ["401","403","unauthorized","invalid","incorrect","authentication"]):
-            raise HTTPException(401, "API Key 已失效")
-        raise HTTPException(400, f"验证失败: {e}")
+    await _validate_key(k.provider, k.api_key)
+    return {"valid": True, "models": _KNOWN_MODELS.get(k.provider, [])}
 
 
 @router.delete("/settings/apikeys/{key_id}")
 def delete_apikey(key_id: int, session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
     k = session.get(ApiKey, key_id)
-    if not k or k.profile_id != profile.id:
+    if not k:
         raise HTTPException(404)
     session.delete(k); session.commit()
     return {"ok": True}
 
 
 def get_active_apikey(db) -> dict | None:
-    profile = profile_service.get_or_create_profile(db)
-    k = db.exec(select(ApiKey).where(ApiKey.profile_id == profile.id, ApiKey.is_active == True)).first()
-    if k:
-        return {"provider": k.provider, "api_key": k.api_key, "model": k.model}
+    """获取当前活跃的 API Key（全局，不绑定 profile）。优先 ApiKey 表，回退到 DisplaySettings。"""
+    from backend.src.models.settings import DisplaySettings
+    # Priority 1: ApiKey table (multi-key system, global)
+    active_keys = db.exec(select(ApiKey).where(ApiKey.is_active == True)).all()
+    # 修复历史遗留的多个 active：只保留第一个
+    if len(active_keys) > 1:
+        for k in active_keys[1:]:
+            k.is_active = False
+            db.add(k)
+        db.commit()
+    if active_keys and active_keys[0].api_key:
+        return {"provider": active_keys[0].provider, "api_key": active_keys[0].api_key, "model": active_keys[0].model}
+    # Priority 2: DisplaySettings (legacy single-key, global)
+    ds = db.exec(select(DisplaySettings)).first()
+    if ds and ds.llm_api_key:
+        return {"provider": ds.llm_provider or "deepseek", "api_key": ds.llm_api_key, "model": ds.llm_model or ""}
     return None
 
 

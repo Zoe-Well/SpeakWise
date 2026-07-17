@@ -25,6 +25,8 @@ from backend.src.api.documents import router as documents_router
 from backend.src.api.settings import router as settings_router
 from backend.src.api.voice import router as voice_router
 from backend.src.api.jd import router as jd_router
+from backend.src.api.review import router as review_router
+from backend.src.api.interview import router as interview_router
 
 
 @asynccontextmanager
@@ -59,6 +61,8 @@ app.include_router(documents_router)
 app.include_router(settings_router)
 app.include_router(voice_router)
 app.include_router(jd_router)
+app.include_router(review_router)
+app.include_router(interview_router)
 
 
 @app.get("/api/health")
