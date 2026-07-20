@@ -33,6 +33,7 @@ jishu.md
 .claude/
 .specify/
 .agents/
+.worktrees/
 skills-lock.json
 preview/
 data/*.db
