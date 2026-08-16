@@ -2,15 +2,14 @@
 
 import json
 import io
-import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
-from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
 from backend.src.db.connection import get_session
 from backend.src.services import profile_service
 from backend.src.models.document import SourceDocument, ProfileUpdateProposal
+from backend.src.services.generation_guard import generation_guard
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +62,19 @@ async def upload_document(
 
     if usage == "parse" and extracted.strip():
         if scope == "profile":
+            guard_key = f"profile:{profile.id}:document:parse"
+            guard_error = generation_guard.try_acquire(guard_key)
+            if guard_error:
+                result["parse_error"] = guard_error
+                return result
             try:
                 proposals = await _llm_parse_resume(extracted)
             except Exception:
                 logger.exception("LLM 解析调用失败: doc_id=%d, filename=%s", doc.id, filename)
                 proposals = []
                 result["parse_error"] = "LLM 服务调用失败，请稍后重试"
+            finally:
+                generation_guard.release(guard_key)
 
             if proposals:
                 prop = ProfileUpdateProposal(
@@ -126,8 +132,18 @@ async def reparse_document(doc_id: int, session: Session = Depends(get_session))
     if not doc.extracted_text or not doc.extracted_text.strip():
         raise HTTPException(400, "文档无已提取文本，无法重新解析")
 
+    guard_key = f"profile:{profile.id}:document:parse"
+    guard_error = generation_guard.try_acquire(guard_key)
+    if guard_error:
+        raise HTTPException(429, guard_error)
     logger.info("重新解析文档 doc_id=%d, filename=%s", doc.id, doc.filename)
-    proposals = await _llm_parse_resume(doc.extracted_text)
+    try:
+        proposals = await _llm_parse_resume(doc.extracted_text)
+    except Exception as exc:
+        logger.exception("重新解析文档失败: doc_id=%d", doc.id)
+        raise HTTPException(502, "LLM 服务调用失败，请稍后重试") from exc
+    finally:
+        generation_guard.release(guard_key)
 
     # 将旧 pending proposals 标记为 rejected
     from sqlmodel import select as _sel

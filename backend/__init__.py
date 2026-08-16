@@ -1,0 +1,1 @@
+"""SpeakWise backend package."""

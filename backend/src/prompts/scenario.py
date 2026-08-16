@@ -10,6 +10,8 @@ SCENARIO_SYSTEM = """你是一位顶级互联网大厂的资深面试教练。�
 
 def build_scenario_messages(profile_data: dict, question: str, jd_analysis: dict | None = None, template_rules: dict | None = None, tone: str = "auto") -> list[dict]:
     """组装场景题生成的 messages。"""
+    from backend.src.services.context_builder import ContextBuilder
+    builder = ContextBuilder(None)
     # Detect tone from question keywords
     if tone == "auto":
         optimistic_keywords = ["优化", "提升", "改进", "效率", "创新", "增长"]
@@ -26,15 +28,7 @@ def build_scenario_messages(profile_data: dict, question: str, jd_analysis: dict
 
     # Inject JD context if available
     if jd_analysis:
-        parts = []
-        if jd_analysis.get("core_skills"):
-            parts.append(f"核心技能要求：{', '.join(jd_analysis['core_skills'])}")
-        if jd_analysis.get("duties"):
-            parts.append(f"主要职责：{', '.join(jd_analysis['duties'])}")
-        if jd_analysis.get("culture_values"):
-            parts.append(f"公司价值观/方向：{', '.join(jd_analysis['culture_values'])}")
-        if parts:
-            context_parts.append("【目标岗位信息】：" + "；".join(parts))
+        context_parts.append("【目标岗位信息】：" + builder.format_jd(jd_analysis))
     else:
         context_parts.append("【模式】：通用面试模式（未提供岗位信息）")
 
@@ -54,16 +48,5 @@ def build_scenario_messages(profile_data: dict, question: str, jd_analysis: dict
 
 
 def _fmt(data: dict) -> str:
-    parts = []
-    for exp in data.get("internships", []):
-        parts.append(f"实习：{exp['company']} {exp['position']}（{exp.get('achievements',[])}）")
-    for proj in data.get("projects", []):
-        parts.append(f"项目：{proj['name']} 角色：{proj['role']} 挑战：{proj['challenge']} 方案：{proj['solution']} 结果：{proj['result']}")
-
-    # Include attached document text as knowledge base
-    for doc in data.get("profile_docs", []):
-        parts.append(f"【附加个人素材-{doc['filename']}】：{doc['text']}")
-    for doc in data.get("jd_docs", []):
-        parts.append(f"【附加公司素材-{doc['filename']}】：{doc['text']}")
-
-    return "\n".join(parts)
+    from backend.src.services.context_builder import ContextBuilder
+    return ContextBuilder(None).format_profile(data)

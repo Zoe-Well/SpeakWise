@@ -49,6 +49,16 @@ class LLMClient:
                 "获取地址：https://platform.deepseek.com"
             )
 
+    def fast_model(self) -> str:
+        """返回与当前 Provider 兼容的轻量模型。
+
+        `deepseek-chat` 只在 DeepSeek 兼容端点使用；其他 Provider 回退到
+        用户当前选择的模型，避免把 DeepSeek 模型名发送到 OpenAI/Anthropic。
+        """
+        if "deepseek.com" in (self.base_url or "").lower():
+            return FAST_MODEL
+        return self.model
+
     async def chat(
         self, messages: list[dict], temperature: float = 0.4, model: str | None = None
     ) -> str:
@@ -78,14 +88,15 @@ class LLMClient:
                 temperature=temperature,
                 stream=True,
             )
-        async for chunk in resp:
-            delta = chunk.choices[0].delta
-            if delta:
-                reasoning = getattr(delta, "reasoning_content", None)
-                if reasoning:
-                    yield {"type": "thinking", "content": reasoning}
-                if delta.content:
-                    yield {"type": "token", "content": delta.content}
+            # Keep the permit until the entire response stream has been consumed.
+            async for chunk in resp:
+                delta = chunk.choices[0].delta
+                if delta:
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if reasoning:
+                        yield {"type": "thinking", "content": reasoning}
+                    if delta.content:
+                        yield {"type": "token", "content": delta.content}
 
 
 # 全局默认实例

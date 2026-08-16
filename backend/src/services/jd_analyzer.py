@@ -1,6 +1,7 @@
 """Job Description 分析服务"""
 
 import json
+import logging
 from backend.src.llm.client import llm_client
 
 JD_SYSTEM_PROMPT = """你是一个岗位描述（JD）解析器。从输入的 JD 文本中提取以下结构化信息，以严格 JSON 格式返回：
@@ -31,4 +32,11 @@ async def analyze_jd(jd_text: str) -> dict:
         )
         return json.loads(resp)
     except Exception as e:
-        return {"core_skills": [], "duties": [], "culture_values": [], "parse_error": str(e), "parse_status": "failed"}
+        logging.getLogger("speakwise").error("JD 解析失败: %s", e, exc_info=True)
+        return {
+            "core_skills": [],
+            "duties": [],
+            "culture_values": [],
+            "parse_error": "JD 解析失败，请重试",
+            "parse_status": "failed",
+        }

@@ -5,9 +5,13 @@ from sqlmodel import Session, select, desc
 
 from backend.src.models.session import ConversationSession, Message
 
+VALID_SESSION_MODES = {"normal", "interview", "mock"}
 
-def create_session(session: Session, profile_id: int, name: str, mode: str = "normal", jd_context_id: Optional[int] = None) -> ConversationSession:
-    s = ConversationSession(profile_id=profile_id, name=name, mode=mode, jd_context_id=jd_context_id)
+
+def create_session(session: Session, profile_id: int, name: str, mode: str = "normal") -> ConversationSession:
+    if mode not in VALID_SESSION_MODES:
+        raise ValueError(f"Unsupported session mode: {mode}")
+    s = ConversationSession(profile_id=profile_id, name=name, mode=mode)
     session.add(s)
     session.commit()
     session.refresh(s)
@@ -27,7 +31,9 @@ def get_session(session: Session, session_id: int) -> Optional[ConversationSessi
 def update_session(session: Session, session_id: int, data: dict) -> Optional[ConversationSession]:
     s = session.get(ConversationSession, session_id)
     if not s: return None
-    for key in ("name", "jd_context_id", "active_template_id"):
+    if "mode" in data and data["mode"] not in {"normal", "interview"}:
+        raise ValueError(f"Unsupported session mode: {data['mode']}")
+    for key in ("name", "mode", "active_template_id"):
         if key in data: setattr(s, key, data[key])
     from datetime import datetime
     s.updated_at = datetime.utcnow()

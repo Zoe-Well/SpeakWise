@@ -23,30 +23,19 @@ TECH_SYSTEM = """你是一位顶级互联网大厂的资深面试教练，擅长
 
 def build_technical_messages(profile_data: dict, question: str, jd_analysis: dict | None = None, template_rules: dict | None = None) -> list[dict]:
     """组装技术面试题的 messages。"""
-    from backend.src.prompts.self_intro import _format_profile as _fmt_prof
+    from backend.src.services.context_builder import ContextBuilder
+    builder = ContextBuilder(None)
 
     context_parts = [
-        f"【用户经历】：{_fmt_prof(profile_data)}",
+        f"【用户经历】：{builder.format_profile(profile_data)}",
         f"【技术面试问题】：{question}",
     ]
 
     # Inject JD context if available
     if jd_analysis:
-        jd_parts = []
-        if jd_analysis.get("core_skills"):
-            jd_parts.append(f"核心技能要求：{', '.join(jd_analysis['core_skills'])}")
-        if jd_analysis.get("duties"):
-            jd_parts.append(f"主要职责：{', '.join(jd_analysis['duties'])}")
-        if jd_parts:
-            context_parts.append("【目标岗位信息】：" + "；".join(jd_parts))
+        context_parts.append("【目标岗位信息】：" + builder.format_jd(jd_analysis))
     else:
         context_parts.append("【模式】：通用技术面试模式（未提供岗位信息）")
-
-    # Include attached documents
-    for doc in profile_data.get("profile_docs", []):
-        context_parts.append(f"【附加个人素材-{doc['filename']}】：{doc['text']}")
-    for doc in profile_data.get("jd_docs", []):
-        context_parts.append(f"【附加公司素材-{doc['filename']}】：{doc['text']}")
 
     # Apply template rules
     if template_rules:

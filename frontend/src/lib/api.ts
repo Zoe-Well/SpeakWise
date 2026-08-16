@@ -6,7 +6,9 @@ function getBaseUrl(): string {
   if (typeof window !== "undefined" && window.speakwise?.backendPort) {
     return `http://${window.speakwise.backendHost}:${window.speakwise.backendPort}`;
   }
-  return "http://127.0.0.1:8001";
+  // Browser production is served by FastAPI on the same origin. Electron and
+  // local development still use the bundled/local backend on port 8001.
+  return import.meta.env.DEV ? "http://127.0.0.1:8001" : "";
 }
 const BASE_URL = getBaseUrl();
 

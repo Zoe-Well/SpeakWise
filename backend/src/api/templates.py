@@ -60,7 +60,7 @@ def create_template(data: dict = Body(...), session: Session = Depends(get_sessi
 @router.put("/prompt-templates/defaults")
 def set_template_default(data: dict = Body(...), session: Session = Depends(get_session)):
     """设置某个 scope 的默认模板。body: { scope, template_id }"""
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     scope = data.get("scope")
     tid = data.get("template_id")
     if not scope or not tid:
@@ -161,7 +161,7 @@ def _tpl_out(t):
 @router.get("/prompt-templates/defaults")
 def get_template_defaults(session: Session = Depends(get_session)):
     """获取每个 scope 的默认模板 ID。"""
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     rows = session.exec(
         select(TemplateDefault).where(TemplateDefault.profile_id == profile.id)
     ).all()

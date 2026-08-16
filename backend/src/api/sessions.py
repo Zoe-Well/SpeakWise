@@ -12,32 +12,41 @@ router = APIRouter(prefix="/api", tags=["sessions"])
 
 @router.get("/sessions")
 def list_sessions(session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     items = session_service.list_sessions(session, profile.id)
     return [{"id": s.id, "name": s.name, "mode": s.mode,
-             "jd_context_id": s.jd_context_id,
              "active_template_id": s.active_template_id,
              "created_at": s.created_at.isoformat(), "updated_at": s.updated_at.isoformat()} for s in items]
 
 
 @router.post("/sessions")
 def create_session(data: dict = Body(...), session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
-    s = session_service.create_session(session, profile.id, data.get("name", "新会话"),
-                                        mode=data.get("mode", "normal"))
+    profile = profile_service.get_active_profile(session)
+    mode = data.get("mode", "normal")
+    if mode not in {"normal", "interview"}:
+        raise HTTPException(400, "mode 必须是 normal 或 interview")
+    s = session_service.create_session(
+        session, profile.id, data.get("name", "新会话"), mode=mode
+    )
     return {"id": s.id, "name": s.name, "mode": s.mode}
 
 
 @router.put("/sessions/{session_id}")
 def update_session(session_id: int, data: dict, session: Session = Depends(get_session)):
-    s = session_service.update_session(session, session_id, data)
-    if not s: raise HTTPException(404)
-    return {"id": s.id, "name": s.name}
+    profile = profile_service.get_active_profile(session)
+    existing = session.get(ConversationSession, session_id)
+    if not existing or existing.profile_id != profile.id:
+        raise HTTPException(404)
+    try:
+        s = session_service.update_session(session, session_id, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"id": s.id, "name": s.name, "mode": s.mode}
 
 
 @router.delete("/sessions/{session_id}")
 def delete_session(session_id: int, session: Session = Depends(get_session)):
-    profile = profile_service.get_or_create_profile(session)
+    profile = profile_service.get_active_profile(session)
     conv = session.get(ConversationSession, session_id)
     if not conv or conv.profile_id != profile.id:
         raise HTTPException(404)
@@ -48,6 +57,10 @@ def delete_session(session_id: int, session: Session = Depends(get_session)):
 
 @router.get("/sessions/{session_id}/messages")
 def list_messages(session_id: int, before: str = None, session: Session = Depends(get_session)):
+    profile = profile_service.get_active_profile(session)
+    conv = session.get(ConversationSession, session_id)
+    if not conv or conv.profile_id != profile.id:
+        raise HTTPException(404)
     msgs = session_service.list_messages(session, session_id, before)
     return [{"id": m.id, "role": m.role, "command": m.command, "content": m.content,
              "thinking": m.thinking, "type": m.type, "created_at": m.created_at.isoformat()} for m in msgs]
@@ -57,9 +70,11 @@ def list_messages(session_id: int, before: str = None, session: Session = Depend
 def batch_delete_sessions(data: dict = Body(...), session: Session = Depends(get_session)):
     """批量删除会话。body: { ids: [1, 2, 3] }"""
     ids = data.get("ids", [])
+    profile = profile_service.get_active_profile(session)
     deleted = 0
     for sid in ids:
-        if session_service.delete_session(session, sid):
+        conv = session.get(ConversationSession, sid)
+        if conv and conv.profile_id == profile.id and session_service.delete_session(session, sid):
             deleted += 1
     return {"deleted": deleted}
 
@@ -68,6 +83,10 @@ def batch_delete_sessions(data: dict = Body(...), session: Session = Depends(get
 def delete_message(session_id: int, message_id: int, session: Session = Depends(get_session)):
     """删除单条消息。如果是用户消息，同时删除紧随其后的 AI 回复。"""
     from backend.src.models.session import Message
+    profile = profile_service.get_active_profile(session)
+    conv = session.get(ConversationSession, session_id)
+    if not conv or conv.profile_id != profile.id:
+        raise HTTPException(404, "会话不存在")
     msg = session.get(Message, message_id)
     if not msg or msg.session_id != session_id:
         raise HTTPException(404, "消息不存在")

@@ -17,6 +17,8 @@ USER_CONTROL_TEMPLATE = """请按以下要求生成完整的自我介绍：
 
 def build_intro_messages(profile_data: dict, jd_analysis: dict | None, extra: str = "", template_rules: dict | None = None) -> list[dict]:
     """组装自我介绍生成的 messages。如果提供 template_rules，覆盖默认结构/风格。"""
+    from backend.src.services.context_builder import ContextBuilder
+    builder = ContextBuilder(None)
     # Apply template rules if provided
     struct_override = ""
     style_override = ""
@@ -36,7 +38,7 @@ def build_intro_messages(profile_data: dict, jd_analysis: dict | None, extra: st
     if style_override:
         context_parts.append(style_override.strip())
     if jd_analysis:
-        context_parts.append(f"【目标岗位】：核心技能={jd_analysis.get('core_skills',[])}；职责={jd_analysis.get('duties',[])}；价值观={jd_analysis.get('culture_values',[])}")
+        context_parts.append(f"【目标岗位】：{builder.format_jd(jd_analysis)}")
     else:
         context_parts.append("【模式】：通用面试模式（未提供岗位信息）")
 
@@ -48,23 +50,6 @@ def build_intro_messages(profile_data: dict, jd_analysis: dict | None, extra: st
 
 
 def _format_profile(data: dict) -> str:
-    """将 profile JSON 转为可注入 Prompt 的文本摘要。"""
-    parts = [f"姓名：{data.get('name','')}"]
-    for exp in data.get("internships", []):
-        ach = exp.get("achievements", [])
-        parts.append(f"实习：{exp['company']} {exp['position']} · 成果：{'；'.join(ach[:3])}")
-    for proj in data.get("projects", []):
-        parts.append(f"项目：{proj['name']}（角色：{proj['role']}）· 挑战：{proj['challenge']} · 方案：{proj['solution']} · 结果：{proj['result']}")
-    skills_by_cat = {}
-    for s in data.get("skills", []):
-        skills_by_cat.setdefault(s["category"], []).append(f"{s['name']}({s['proficiency']})")
-    for cat, items in skills_by_cat.items():
-        parts.append(f"技能-{cat}：{', '.join(items)}")
-
-    # Include attached document text as knowledge base
-    for doc in data.get("profile_docs", []):
-        parts.append(f"【附加个人素材-{doc['filename']}】：{doc['text']}")
-    for doc in data.get("jd_docs", []):
-        parts.append(f"【附加公司素材-{doc['filename']}】：{doc['text']}")
-
-    return "\n".join(parts)
+    """统一使用 ContextBuilder 的预算与知识格式。"""
+    from backend.src.services.context_builder import ContextBuilder
+    return ContextBuilder(None).format_profile(data)

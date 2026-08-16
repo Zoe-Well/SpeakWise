@@ -10,19 +10,22 @@ Write-Host ""
 Write-Host "[1/4] Building frontend..." -ForegroundColor Yellow
 Set-Location frontend
 npm run build
+if ($LASTEXITCODE -ne 0) { throw "Frontend build failed with exit code $LASTEXITCODE" }
 Set-Location $PSScriptRoot
 Write-Host "[1/4] Frontend OK" -ForegroundColor Green
 
 Write-Host "[2/4] Building Python backend (PyInstaller)..." -ForegroundColor Yellow
-pyinstaller --onefile --name speakwise-backend `
-  --add-data "backend/src/prompts;prompts" `
+uv run pyinstaller --noconfirm --clean --onefile --name speakwise-backend `
+    --paths "." `
+    --add-data "backend/src/prompts;prompts" `
   --hidden-import=sse_starlette `
   --hidden-import=sqlmodel `
   --hidden-import=pypdf `
   --hidden-import=docx `
   --hidden-import=dotenv `
-  --collect-all openai `
-  backend/src/main.py
+    --collect-all openai `
+    backend/src/main.py
+if ($LASTEXITCODE -ne 0) { throw "Backend build failed with exit code $LASTEXITCODE" }
 Write-Host "[2/4] Backend OK" -ForegroundColor Green
 
 Write-Host "[3/4] Copying backend to dist..." -ForegroundColor Yellow
@@ -34,6 +37,7 @@ Write-Host "[3/4] Copy OK" -ForegroundColor Green
 Write-Host "[4/4] Electron-builder packaging..." -ForegroundColor Yellow
 Set-Location electron
 npm run build
+if ($LASTEXITCODE -ne 0) { throw "Electron build failed with exit code $LASTEXITCODE" }
 Set-Location $PSScriptRoot
 Write-Host "[4/4] Electron OK" -ForegroundColor Green
 

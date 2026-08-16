@@ -1,5 +1,7 @@
 """SpeakWise 后端入口 — FastAPI 应用"""
 
+import base64
+import hmac
 import sys, os
 # PyInstaller 兼容: standalone exe 运行时把 backend/src 的父目录加入 path
 _path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,7 +16,9 @@ if not getattr(_sys, "frozen", False):  # PyInstaller sets sys.frozen = True
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.src.db.connection import init_db
 from backend.src.api.profile import router as profile_router
@@ -43,6 +47,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def optional_basic_auth(request, call_next):
+    """Protect the single-user web demo when Railway auth variables are set."""
+    username = os.environ.get("APP_BASIC_AUTH_USER", "")
+    password = os.environ.get("APP_BASIC_AUTH_PASSWORD", "")
+    if not username or not password or request.url.path == "/api/health":
+        return await call_next(request)
+
+    supplied = request.headers.get("Authorization", "")
+    expected = "Basic " + base64.b64encode(
+        f"{username}:{password}".encode("utf-8")
+    ).decode("ascii")
+    if not hmac.compare_digest(supplied, expected):
+        return PlainTextResponse(
+            "Authentication required",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="SpeakWise"'},
+        )
+    return await call_next(request)
+
 # CORS — 仅允许前端开发服务器和桌面应用
 app.add_middleware(
     CORSMiddleware,
@@ -70,6 +95,14 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
+# Railway serves the built Vite application and API from the same origin.
+_frontend_dist = os.environ.get("FRONTEND_DIST_DIR") or os.path.join(
+    _path, "frontend", "dist"
+)
+if os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
+
+
 if __name__ == "__main__":
     import sys, os, argparse
     import uvicorn
@@ -78,6 +111,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=8001)
     args = parser.parse_args()
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

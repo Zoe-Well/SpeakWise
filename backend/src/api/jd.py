@@ -6,8 +6,8 @@ from sqlmodel import Session, select as _sel
 from backend.src.db.connection import get_session
 from backend.src.services.jd_analyzer import analyze_jd
 from backend.src.models.job_context import JobContext
-from backend.src.models.session import ConversationSession
 from backend.src.services import profile_service
+from backend.src.services.generation_guard import generation_guard
 
 router = APIRouter(prefix="/api", tags=["jd"])
 
@@ -107,24 +107,29 @@ def get_latest_jd(session: Session = Depends(get_session)):
 async def analyze_jd_endpoint(data: dict = Body(None), session: Session = Depends(get_session)):
     """解析岗位描述文本并持久化，自动激活新 JD。
 
-    请求: { raw_text, name?, session_id? }
+    请求: { raw_text, name? }
     """
     text = (data or {}).get("raw_text", "")
     jd_name = (data or {}).get("name", "").strip()
-    session_id = (data or {}).get("session_id")
 
     if not text:
         return {"parse_status": "failed", "core_skills": [], "duties": [], "culture_values": [],
                 "error": "empty input"}
 
-    result = await analyze_jd(text)
+    profile = profile_service.get_active_profile(session)
+    guard_key = f"profile:{profile.id}:jd:analyze"
+    guard_error = generation_guard.try_acquire(guard_key)
+    if guard_error:
+        raise HTTPException(429, guard_error)
+    try:
+        result = await analyze_jd(text)
+    finally:
+        generation_guard.release(guard_key)
     if result.get("parse_error"):
         return {"parse_status": "failed", "core_skills": [], "duties": [], "culture_values": [],
                 "error": result["parse_error"]}
 
     # 持久化 JD 分析结果
-    profile = profile_service.get_active_profile(session)
-
     # Deactivate existing JDs so new one becomes the active one
     existing = session.exec(
         _sel(JobContext).where(JobContext.profile_id == profile.id)
@@ -140,16 +145,6 @@ async def analyze_jd_endpoint(data: dict = Body(None), session: Session = Depend
     session.add(jc)
     session.commit()
     session.refresh(jc)
-
-    # 如果提供了 session_id，关联到该会话
-    if session_id:
-        conv = session.get(ConversationSession, session_id)
-        if conv:
-            conv.jd_context_id = jc.id
-            from datetime import datetime
-            conv.updated_at = datetime.utcnow()
-            session.add(conv)
-            session.commit()
 
     return {
         "parse_status": "success",

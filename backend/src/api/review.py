@@ -1,14 +1,16 @@
 """简历评审 API —— SSE 流式端点"""
 
 import json
+import logging
 from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
-from sqlmodel import Session, select as _sel
+from sqlmodel import Session
 
 from backend.src.db.connection import get_session
-from backend.src.services import profile_service, conversation_service
+from backend.src.services import profile_service
 from backend.src.llm.client import llm_client
-from backend.src.models.job_context import JobContext
+from backend.src.services.context_builder import ContextBuilder
+from backend.src.services.generation_guard import generation_guard, public_generation_error
 
 router = APIRouter(prefix="/api/review", tags=["review"])
 
@@ -16,19 +18,8 @@ router = APIRouter(prefix="/api/review", tags=["review"])
 def _get_knowledge_data(session: Session) -> tuple[dict, dict | None]:
     """获取当前活跃知识库：profile_data + jd_analysis。"""
     profile = profile_service.get_active_profile(session)
-    profile_data = conversation_service.build_profile_data_for_prompt(session, profile.id)
-
-    jd_analysis = None
-    jc = session.exec(
-        _sel(JobContext)
-        .where(JobContext.profile_id == profile.id)
-        .where(JobContext.is_active == True)  # noqa: E712
-        .order_by(JobContext.id.desc())
-    ).first()
-    if jc:
-        jd_analysis = jc.to_analysis_dict()
-
-    return profile_data, jd_analysis
+    builder = ContextBuilder(session)
+    return builder.load_profile_data(profile.id), builder.load_active_jd(profile.id)
 
 
 async def _stream_llm(messages: list[dict], temperature: float = 0.4):
@@ -60,15 +51,29 @@ async def review_resume(request: Request, session: Session = Depends(get_session
     """简历评审：综合评估简历结构、量化、匹配度，给出具体改进建议。"""
     from backend.src.prompts.resume_review import build_resume_review_messages
 
-    # Reconfigure LLM from user settings
-    _apply_llm_settings(session)
-
-    profile_data, jd_analysis = _get_knowledge_data(session)
-    messages = build_resume_review_messages(profile_data, jd_analysis)
+    profile = profile_service.get_active_profile(session)
+    guard_key = f"profile:{profile.id}:review:resume"
+    guard_error = generation_guard.try_acquire(guard_key)
+    if guard_error:
+        return EventSourceResponse(_error(guard_error))
+    try:
+        _apply_llm_settings(session)
+        profile_data, jd_analysis = _get_knowledge_data(session)
+        messages = build_resume_review_messages(profile_data, jd_analysis)
+    except Exception as exc:
+        generation_guard.release(guard_key)
+        logging.getLogger("speakwise").error("简历评审准备失败: %s", exc, exc_info=True)
+        return EventSourceResponse(_error(public_generation_error(exc)))
 
     async def _stream():
-        async for event in _stream_llm(messages, temperature=0.4):
-            yield event
+        try:
+            async for event in _stream_llm(messages, temperature=0.4):
+                yield event
+        except Exception as exc:
+            logging.getLogger("speakwise").error("简历评审失败: %s", exc, exc_info=True)
+            yield {"event": "error", "data": public_generation_error(exc)}
+        finally:
+            generation_guard.release(guard_key)
 
     return EventSourceResponse(_stream())
 
@@ -78,15 +83,29 @@ async def analyze_job(request: Request, session: Session = Depends(get_session))
     """岗位解析：深度解读 JD + 面试策略 + 简历匹配分析 + STAR 话术建议。"""
     from backend.src.prompts.job_analysis import build_job_analysis_messages
 
-    # Reconfigure LLM from user settings
-    _apply_llm_settings(session)
-
-    profile_data, jd_analysis = _get_knowledge_data(session)
-    messages = build_job_analysis_messages(profile_data, jd_analysis)
+    profile = profile_service.get_active_profile(session)
+    guard_key = f"profile:{profile.id}:review:job"
+    guard_error = generation_guard.try_acquire(guard_key)
+    if guard_error:
+        return EventSourceResponse(_error(guard_error))
+    try:
+        _apply_llm_settings(session)
+        profile_data, jd_analysis = _get_knowledge_data(session)
+        messages = build_job_analysis_messages(profile_data, jd_analysis)
+    except Exception as exc:
+        generation_guard.release(guard_key)
+        logging.getLogger("speakwise").error("岗位分析准备失败: %s", exc, exc_info=True)
+        return EventSourceResponse(_error(public_generation_error(exc)))
 
     async def _stream():
-        async for event in _stream_llm(messages, temperature=0.4):
-            yield event
+        try:
+            async for event in _stream_llm(messages, temperature=0.4):
+                yield event
+        except Exception as exc:
+            logging.getLogger("speakwise").error("岗位分析失败: %s", exc, exc_info=True)
+            yield {"event": "error", "data": public_generation_error(exc)}
+        finally:
+            generation_guard.release(guard_key)
 
     return EventSourceResponse(_stream())
 
@@ -105,3 +124,7 @@ def _apply_llm_settings(db):
         )
     else:
         llm_client.configure(api_key="", base_url=None, model=None)
+
+
+async def _error(message: str):
+    yield {"event": "error", "data": message}

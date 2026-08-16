@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost, apiDelete } from "../lib/api";
+import { apiGet, apiPost, apiPut, apiDelete } from "../lib/api";
 import { Plus, Trash2, CheckSquare, X, ChevronDown } from "lucide-react";
 import { useToast } from "./Toast";
 
@@ -36,7 +36,7 @@ export default function SessionSelector({ activeId, onSelect }: Props) {
 
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [newMode, setNewMode] = useState("interview");
+  const [newMode, setNewMode] = useState("normal");
   const [showNewDialog, setShowNewDialog] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -66,6 +66,16 @@ export default function SessionSelector({ activeId, onSelect }: Props) {
     onError: () => toast.error("删除失败"),
   });
 
+  const switchModeMut = useMutation({
+    mutationFn: ({ id, mode }: { id: number; mode: "normal" | "interview" }) =>
+      apiPut(`/api/sessions/${id}`, { mode }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+      toast.success("会话模式已切换");
+    },
+    onError: () => toast.error("切换模式失败"),
+  });
+
   const batchDelete = async () => {
     if (selected.size === 0) return;
     if (!confirm(`删除所选 ${selected.size} 个会话及全部消息？`)) return;
@@ -91,14 +101,23 @@ export default function SessionSelector({ activeId, onSelect }: Props) {
         <>
           {/* Mode badge */}
           {activeSession && (
-            <span className={`text-xs px-2 py-1 rounded-md font-medium flex-shrink-0 ${MODE_LABELS[activeMode]?.color || MODE_LABELS.normal.color}`}>
+            <button
+              type="button"
+              disabled={switchModeMut.isPending}
+              onClick={() => switchModeMut.mutate({
+                id: activeSession.id,
+                mode: activeMode === "interview" ? "normal" : "interview",
+              })}
+              title="点击切换普通/面试模式"
+              className={`text-xs px-2 py-1 rounded-md font-medium flex-shrink-0 disabled:opacity-50 ${MODE_LABELS[activeMode]?.color || MODE_LABELS.normal.color}`}
+            >
               {MODE_LABELS[activeMode]?.icon} {MODE_LABELS[activeMode]?.label}
-            </span>
+            </button>
           )}
           {sessions.length === 0 ? (
             <button onClick={() => setShowNewDialog(true)}
               className="flex-1 text-sm border border-indigo-200 bg-indigo-50 text-indigo-600 rounded-lg px-3 py-1.5 font-medium hover:bg-indigo-100 text-left">
-              🎯 创建第一个会话
+              💬 创建第一个会话
             </button>
           ) : (
             <select

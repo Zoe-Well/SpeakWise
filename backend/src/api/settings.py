@@ -36,10 +36,28 @@ LLM_PROVIDERS = {
 
 # ── 已知模型列表（/models 端点不是所有厂商都支持）──
 _KNOWN_MODELS = {
-    "deepseek": ["deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
+    "deepseek": ["deepseek-v4-pro", "deepseek-v4-flash"],
     "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini", "o3-mini"],
     "anthropic": ["claude-sonnet-4-20250514", "claude-haiku-3-5-20250514", "claude-opus-4-20250514"],
 }
+
+
+def _provider_error_status(exc: Exception) -> int | None:
+    """Return the upstream HTTP status without parsing provider error text."""
+    status = getattr(exc, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _raise_validation_error(exc: Exception) -> None:
+    """Map provider failures to stable, non-sensitive API errors."""
+    status = _provider_error_status(exc)
+    if status in (401, 403):
+        raise HTTPException(401, "API Key 无效或没有访问权限")
+    if status == 402:
+        raise HTTPException(402, "API Key 余额不足")
+    if status == 429:
+        raise HTTPException(429, "模型服务请求过于频繁，请稍后重试")
+    raise HTTPException(400, "API Key 验证失败，请检查模型权限或网络连接")
 
 
 @router.post("/settings/llm/validate")
@@ -57,7 +75,7 @@ async def validate_llm_key(data: dict = Body(...)):
     models = _KNOWN_MODELS.get(provider_key, [])
 
     # Validate key by trying each model in sequence (first success → valid)
-    errors = []
+    last_error: Exception | None = None
     for model_name in models:
         try:
             await client.chat.completions.create(
@@ -66,16 +84,14 @@ async def validate_llm_key(data: dict = Body(...)):
             )
             return {"valid": True, "models": models}
         except Exception as e:
-            msg = str(e)
-            errors.append(f"{model_name}: {msg}")
-            # If it's genuinely an auth error (not model-not-found, not network), fail fast
-            msg_lower = msg.lower()
-            if any(w in msg_lower for w in ["401", "403", "unauthorized"]):
-                raise HTTPException(401, f"API Key 无效或没有权限 → {msg[:200]}")
-            # For other errors (network, SSL, model name), try next model
+            last_error = e
+            if _provider_error_status(e) in (401, 402, 403, 429):
+                _raise_validation_error(e)
 
     # All models failed
-    raise HTTPException(400, f"所有模型均验证失败: {'; '.join(errors[-3:])}")
+    if last_error is not None:
+        _raise_validation_error(last_error)
+    raise HTTPException(400, "没有可用于验证的模型")
 
 
 @router.get("/settings/llm")
@@ -155,16 +171,23 @@ async def _validate_key(provider_key: str, api_key: str) -> None:
     if not provider:
         raise HTTPException(400, f"不支持的厂商: {provider_key}")
     client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"], timeout=25.0)
-    try:
-        await client.chat.completions.create(
-            model="deepseek-chat", messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1, temperature=0, stream=False,
-        )
-    except Exception as e:
-        msg = str(e).lower()
-        if any(w in msg for w in ["401","403","unauthorized","invalid","incorrect","authentication"]):
-            raise HTTPException(401, "API Key 无效或已失效")
-        raise HTTPException(400, f"验证失败: {str(e)[:200]}")
+    models = _KNOWN_MODELS.get(provider_key, [])
+    last_error: Exception | None = None
+    for model_name in models:
+        try:
+            await client.chat.completions.create(
+                model=model_name, messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1, temperature=0, stream=False,
+            )
+            return
+        except Exception as e:
+            last_error = e
+            if _provider_error_status(e) in (401, 402, 403, 429):
+                _raise_validation_error(e)
+
+    if last_error is not None:
+        _raise_validation_error(last_error)
+    raise HTTPException(400, "当前服务商没有可用于验证的模型")
 
 
 @router.get("/settings/apikeys")

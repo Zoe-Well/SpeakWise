@@ -42,11 +42,11 @@ Write-Host "[3/4] Frontend ready" -ForegroundColor Green
 # 4. Start services
 Write-Host "[4/4] Starting services..." -ForegroundColor Yellow
 
-# Determine backend port — try to kill old process on 8000, fallback to 8001
-$BACKEND_PORT = 8000
-$conn = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+# Use the same backend port as Vite and Electron.
+$BACKEND_PORT = 8001
+$conn = Get-NetTCPConnection -LocalPort $BACKEND_PORT -ErrorAction SilentlyContinue
 if ($conn) {
-    Write-Host "  Port 8000 is in use (PID $($conn.OwningProcess))" -ForegroundColor Gray
+    Write-Host "  Port $BACKEND_PORT is in use (PID $($conn.OwningProcess))" -ForegroundColor Gray
     $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
     if ($proc) {
         Write-Host "  Killing $($proc.ProcessName) (PID $($conn.OwningProcess))..." -ForegroundColor Gray
@@ -54,21 +54,12 @@ if ($conn) {
         Start-Sleep 1
     } else {
         Write-Host "  WARNING: Zombie socket detected (PID $($conn.OwningProcess) not found)" -ForegroundColor Yellow
-        Write-Host "  Falling back to port 8001..." -ForegroundColor Yellow
-        $BACKEND_PORT = 8001
-        # Update api.ts base URL to match
-        $apiFile = "$ROOT\frontend\src\lib\api.ts"
-        (Get-Content $apiFile) -replace 'http://127\.0\.0\.1:\d+', "http://127.0.0.1:$BACKEND_PORT" | Set-Content $apiFile
-        Write-Host "  Updated api.ts BASE_URL to port $BACKEND_PORT" -ForegroundColor Gray
+        Write-Host "  ERROR: Port $BACKEND_PORT cannot be released." -ForegroundColor Red
+        exit 1
     }
 }
 
-$isZombie = ($BACKEND_PORT -eq 8001)
-if ($isZombie) {
-    Start-Process -FilePath "uv" -ArgumentList "run","uvicorn","backend.src.main:app","--host","127.0.0.1","--port","8001" -WorkingDirectory $ROOT -WindowStyle Minimized
-} else {
-    Start-Process -FilePath "uv" -ArgumentList "run","uvicorn","backend.src.main:app","--host","127.0.0.1","--port","8000" -WorkingDirectory $ROOT -WindowStyle Minimized
-}
+Start-Process -FilePath "uv" -ArgumentList "run","uvicorn","backend.src.main:app","--host","127.0.0.1","--port","8001" -WorkingDirectory $ROOT -WindowStyle Minimized
 
 # Wait for backend
 Write-Host "  Waiting for backend..." -ForegroundColor Gray
@@ -79,7 +70,7 @@ do {
 Write-Host "  Backend:  http://127.0.0.1:$BACKEND_PORT" -ForegroundColor Green
 
 # Start frontend in a new window
-Start-Process -FilePath "npx" -ArgumentList "vite","--host" -WorkingDirectory "$ROOT\frontend" -WindowStyle Minimized
+Start-Process -FilePath "npx.cmd" -ArgumentList "vite","--host" -WorkingDirectory "$ROOT\frontend" -WindowStyle Minimized
 
 # Wait for frontend
 Write-Host "  Waiting for frontend..." -ForegroundColor Gray
@@ -100,10 +91,5 @@ Write-Host "  Frontend: http://localhost:5173"
 Write-Host "  Backend:  http://127.0.0.1:$BACKEND_PORT"
 Write-Host "  API Docs: http://127.0.0.1:$BACKEND_PORT/docs"
 Write-Host ""
-if ($isZombie) {
-    Write-Host "  NOTE: Port 8000 had a zombie socket, using 8001 instead." -ForegroundColor Yellow
-    Write-Host "  To permanently clear it: reboot, TCPView, or disable/enable network adapter." -ForegroundColor Yellow
-    Write-Host "  See start.md '僵尸套接字' section for details." -ForegroundColor Yellow
-}
 Write-Host "  Run .\stop.ps1 to stop all services"
 Write-Host "======================================" -ForegroundColor Cyan

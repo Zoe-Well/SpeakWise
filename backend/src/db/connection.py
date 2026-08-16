@@ -37,12 +37,31 @@ def _migrate_mode_column():
     """为 conversation_sessions 表新增 mode 列（幂等迁移）。"""
     try:
         with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE conversation_sessions ADD COLUMN mode TEXT DEFAULT 'interview'"))
+            try:
+                conn.execute(text("ALTER TABLE conversation_sessions ADD COLUMN mode TEXT DEFAULT 'normal'"))
+            except Exception:
+                pass
+            # 即使列已存在，也修复历史 NULL 值。
+            conn.execute(text("UPDATE conversation_sessions SET mode = 'normal' WHERE mode IS NULL"))
             conn.commit()
-            # Update existing rows: NULL → interview
-            conn.execute(text("UPDATE conversation_sessions SET mode = 'interview' WHERE mode IS NULL"))
+            logger.info("Migration: ensured conversation session mode column")
+    except Exception:
+        pass
+
+
+def _migrate_memory_columns():
+    """为已有会话表增加滚动摘要字段（幂等）。"""
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE conversation_sessions ADD COLUMN memory_summary TEXT"))
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE conversation_sessions ADD COLUMN summary_up_to_message_id INTEGER"))
+            except Exception:
+                pass
             conn.commit()
-            logger.info("Migration: added mode column to conversation_sessions")
     except Exception:
         pass
 
@@ -63,6 +82,7 @@ def init_db():
     SQLModel.metadata.create_all(engine)
     _migrate_thinking_column()
     _migrate_mode_column()
+    _migrate_memory_columns()
 
     # Ensure api_keys table exists
     try:
@@ -157,4 +177,3 @@ def get_session():
         yield session
     finally:
         session.close()
-

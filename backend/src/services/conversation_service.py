@@ -1,14 +1,17 @@
 """对话服务：斜杠命令路由 + 上下文组装 + 生成编排"""
 
 import json
+import logging
 from typing import AsyncIterator
 
-from sqlmodel import Session
-from backend.src.llm.client import llm_client, StreamChunk, FAST_MODEL
+from sqlmodel import Session, select
+from backend.src.llm.client import llm_client, StreamChunk
+from backend.src.models.session import Message
 from backend.src.prompts.self_intro import build_intro_messages
 from backend.src.prompts.scenario import build_scenario_messages
 from backend.src.prompts.technical import build_technical_messages
-from backend.src.services import profile_service, session_service
+from backend.src.services import profile_service
+from backend.src.services.context_builder import ContextBuilder
 
 
 async def _split_thinking_stream(raw_stream: AsyncIterator[str]) -> AsyncIterator[StreamChunk]:
@@ -70,28 +73,53 @@ def classify_message(content: str) -> tuple[bool, str]:
     for kw in _INTERVIEW_KEYWORDS:
         if kw.lower() in text_lower:
             return True, llm_client.model  # 使用默认 pro 模型
-    return False, FAST_MODEL
+    return False, llm_client.fast_model()
 
 
 # ── 面试模式下的意图分类 ────────────────────────────────────
 
-# 自我介绍关键词
-_INTRO_KEYWORDS = ["自我介绍", "介绍自己", "个人介绍", "self intro", "introduce yourself",
-                    "概述", "我是", "我叫", "我的经历"]
-# 技术题关键词
-_TECH_KEYWORDS = ["算法", "数据结构", "代码", "编程", "leetcode", "系统设计",
-                   "写一个", "实现", "复杂度", "设计模式", "架构", "SQL", "数据库",
-                   "算法题", "编程题", "coding", "code", "system design",
-                   "时间复杂度", "react", "vue", "python函数", "java类",
-                   "手写", "八股", "原理", "底层", "网络协议", "操作系统",
-                   "是什么", "为什么", "怎么用", "区别", "对比", "优缺点",
-                   "fastapi", "django", "flask", "langgraph", "langchain",
-                   "docker", "kubernetes", "redis", "mongodb", "postgresql",
-                   "什么是", "如何", "解释", "定义", "概念"]
-# 场景题关键词
-_SCENARIO_KEYWORDS = ["场景", "STAR", "情景", "项目经历", "行为面试", "behavioral",
-                       "遇到", "怎么处理", "如何解决", "说说你", "讲一个", "举例",
-                       "案例", "冲突", "失败", "挑战", "团队", "领导", "沟通"]
+_INTENT_WEIGHTS = {
+    "/intro": {
+        "自我介绍": 4, "介绍自己": 4, "个人介绍": 4,
+        "self intro": 4, "introduce yourself": 4,
+        "我叫": 3, "我的经历": 2, "概述自己": 3,
+    },
+    "/technical": {
+        "算法": 3, "数据结构": 3, "代码": 2, "编程": 2,
+        "leetcode": 3, "系统设计": 3, "设计模式": 3,
+        "时间复杂度": 3, "网络协议": 3, "操作系统": 3,
+        "数据库": 3, "sql": 3, "react": 3, "vue": 3,
+        "fastapi": 3, "django": 3, "flask": 3,
+        "langgraph": 3, "langchain": 3, "docker": 3,
+        "kubernetes": 3, "redis": 3, "mongodb": 3, "postgresql": 3,
+        "手写": 2, "复杂度": 2, "底层": 2, "架构": 2,
+        "实现": 1, "原理": 1, "区别": 1, "优缺点": 1,
+        "coding": 3, "system design": 3,
+    },
+    "/scenario": {
+        "场景题": 4, "行为面试": 4, "behavioral": 4, "star": 4,
+        "怎么处理": 3, "如何解决": 3, "讲一个": 2, "举例": 2,
+        "冲突": 3, "失败": 2, "挑战": 2, "团队": 1,
+        "领导": 1, "沟通": 1, "项目经历": 2, "案例": 2,
+    },
+}
+
+_FOLLOWUP_MARKERS = ("那", "这个", "还有", "继续", "再说", "具体", "为什么", "呢")
+_VALID_LLM_INTENTS = {"intro", "scenario", "technical", "followup", "general"}
+
+
+def _explicit_intent(text_lower: str) -> str | None:
+    for command in ("/intro", "/scenario", "/technical", "/followup"):
+        if text_lower.startswith(command):
+            return command
+    return None
+
+
+def _intent_scores(text_lower: str) -> dict[str, int]:
+    return {
+        intent: sum(weight for keyword, weight in keywords.items() if keyword in text_lower)
+        for intent, keywords in _INTENT_WEIGHTS.items()
+    }
 
 
 def classify_interview_intent(content: str) -> str | None:
@@ -101,30 +129,88 @@ def classify_interview_intent(content: str) -> str | None:
     """
     text_lower = content.lower()
 
-    # Check explicit slash commands first
-    if text_lower.startswith("/intro"):
-        return "/intro"
-    if text_lower.startswith("/scenario"):
-        return "/scenario"
-    if text_lower.startswith("/technical"):
-        return "/technical"
-    if text_lower.startswith("/followup"):
-        return "/followup"
+    explicit = _explicit_intent(text_lower)
+    if explicit:
+        return explicit
 
-    # Keyword scoring
-    intro_score = sum(1 for kw in _INTRO_KEYWORDS if kw.lower() in text_lower)
-    tech_score = sum(1 for kw in _TECH_KEYWORDS if kw.lower() in text_lower)
-    scenario_score = sum(1 for kw in _SCENARIO_KEYWORDS if kw.lower() in text_lower)
+    scores = _intent_scores(text_lower)
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    best_intent, best_score = ranked[0]
+    second_score = ranked[1][1]
+    if best_score >= 3 and best_score - second_score >= 2:
+        return best_intent
 
-    # Need at least 1 keyword match to classify
-    if tech_score > 0 and tech_score >= intro_score and tech_score >= scenario_score:
-        return "/technical"
-    if scenario_score > 0 and scenario_score >= intro_score:
-        return "/scenario"
-    if intro_score > 0:
-        return "/intro"
+    # Low-confidence or conflicting rules are delegated to the fast model.
+    return None
 
-    # No clear match → generic interview response (full context, no template)
+
+def _recent_interview_intent(
+    db: Session | None, session_id: int | None, exclude_message_id: int | None
+) -> str | None:
+    if not db or not session_id:
+        return None
+    statement = select(Message).where(Message.session_id == session_id)
+    if exclude_message_id:
+        statement = statement.where(Message.id != exclude_message_id)
+    recent = list(db.exec(statement.order_by(Message.id.desc()).limit(10)).all())
+    type_map = {
+        "self_intro": "/intro", "scenario": "/scenario",
+        "technical": "/technical", "follow_up": "/followup",
+    }
+    for message in recent:
+        if message.command in {"/intro", "/scenario", "/technical", "/followup"}:
+            return message.command
+        if message.type in type_map:
+            return type_map[message.type]
+    return None
+
+
+async def classify_interview_intent_hybrid(
+    content: str,
+    *,
+    db: Session | None = None,
+    session_id: int | None = None,
+    current_message_id: int | None = None,
+) -> str | None:
+    """Classify once per interview request: command → rules → history → fast LLM."""
+    text = content.strip()
+    rule_intent = classify_interview_intent(text)
+    if rule_intent:
+        return rule_intent
+
+    if len(text) <= 20 and any(marker in text.lower() for marker in _FOLLOWUP_MARKERS):
+        recent_intent = _recent_interview_intent(db, session_id, current_message_id)
+        if recent_intent:
+            return recent_intent
+
+    prompt = f"""判断下面这句话在面试准备中的主要意图。
+只返回 JSON：{{"intent":"intro|scenario|technical|followup|general","confidence":0到1}}
+
+分类说明：
+- intro：生成或修改自我介绍
+- scenario：行为题、STAR、项目挑战、团队冲突
+- technical：技术知识、编程、系统设计
+- followup：要求面试官继续追问
+- general：无法归入以上类别
+
+用户消息：{text[:1000]}"""
+    try:
+        raw = await llm_client.chat(
+            [{"role": "system", "content": "你是面试意图分类器。"},
+             {"role": "user", "content": prompt}],
+            temperature=0,
+            model=llm_client.fast_model(),
+        )
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+        result = json.loads(cleaned)
+        intent = str(result.get("intent", "general")).lower()
+        confidence = float(result.get("confidence", 0))
+        if intent in _VALID_LLM_INTENTS and confidence >= 0.6:
+            return None if intent == "general" else f"/{intent}"
+    except Exception as exc:
+        logging.getLogger("speakwise").warning("面试意图分类失败: %s", exc)
     return None
 
 
@@ -142,9 +228,7 @@ def _load_template_for_scope(db, scope: str) -> dict | None:
         return None
     from backend.src.models.template import PromptTemplate, TemplateDefault
     from sqlmodel import select as _sel
-    from backend.src.services import profile_service
-
-    profile = profile_service.get_or_create_profile(db)
+    profile = profile_service.get_active_profile(db)
     default = db.exec(
         _sel(TemplateDefault).where(
             TemplateDefault.profile_id == profile.id,
@@ -186,77 +270,6 @@ def _parse_template_rules(t) -> dict:
         except Exception:
             rules["style"] = t.style_rules
     return rules
-    if not t:
-        return None
-    import json as _json
-    rules = {}
-    if t.structure_rules:
-        try:
-            rules["structure"] = _json.loads(t.structure_rules)
-        except Exception:
-            rules["structure"] = t.structure_rules
-    if t.style_rules:
-        try:
-            rules["style"] = _json.loads(t.style_rules)
-        except Exception:
-            rules["style"] = t.style_rules
-    return rules
-
-
-def _get_recent_messages(db, session_id: int, limit: int = 6) -> list[dict]:
-    """获取最近 N 条历史消息，以原生 role 格式返回。
-
-    排除最新一条（当前触发请求的 user message），返回之前
-    的 user/assistant 对，供 prompt 直接使用。
-    """
-    from backend.src.models.session import Message as Msg
-    from sqlmodel import select as _sel
-    msgs = db.exec(
-        _sel(Msg).where(Msg.session_id == session_id)
-        .order_by(Msg.created_at.desc()).limit(limit + 1)  # +1 to skip current
-    ).all()
-    msgs = list(reversed(msgs))  # chronological
-
-    if not msgs:
-        return []
-
-    # Skip the most recent message (the one just saved by generate.py)
-    history = msgs[:-1] if len(msgs) > 1 else []
-
-    return [
-        {"role": m.role, "content": m.content}
-        for m in history[-limit:]
-        if m.content.strip()
-    ]
-
-
-def _build_context(db, session_id: int) -> str:
-    """从数据库加载对话历史，组装为纯文本（保留给 _build_free_text_context 用）。"""
-    from backend.src.models.session import Message as Msg
-    from sqlmodel import select as _sel
-    msgs = db.exec(
-        _sel(Msg).where(Msg.session_id == session_id)
-        .order_by(Msg.created_at.desc()).limit(80)
-    ).all()
-    msgs = list(reversed(msgs))
-
-    if not msgs:
-        return ""
-
-    recent = msgs[-30:]
-    lines = ["【对话历史】"]
-    full_keep = 10
-    for i, m in enumerate(recent):
-        role = "用户" if m.role == "user" else "助手"
-        is_recent = i >= len(recent) - full_keep
-        txt = m.content if is_recent else m.content[:400] + ("…" if len(m.content) > 400 else "")
-        if txt.strip():
-            lines.append(f"{role}: {txt}")
-
-    if len(msgs) > 30:
-        lines.insert(1, f"(省略了前 {len(msgs) - 30} 条消息)")
-
-    return "\n".join(lines)
 
 
 async def handle_message(
@@ -268,6 +281,9 @@ async def handle_message(
     template_id: str | None = None,
     db=None,
     session_mode: str = "normal",
+    current_message_id: int | None = None,
+    resolved_intent: str | None = None,
+    intent_is_resolved: bool = False,
 ) -> AsyncIterator[StreamChunk]:
     """根据 command 路由到对应的生成器，yield 结构化 chunk。
 
@@ -280,7 +296,10 @@ async def handle_message(
     template_rules = None
     if db:
         # Determine scope from effective command
-        effective = command or classify_interview_intent(content)
+        effective = (
+            resolved_intent if intent_is_resolved
+            else command or classify_interview_intent(content)
+        )
         scope = {"intro": "self_intro", "scenario": "scenario", "technical": "technical"}.get(
             (effective or "").replace("/", ""), None)
         if scope:
@@ -288,8 +307,12 @@ async def handle_message(
         if not template_rules:
             template_rules = _load_template(db, template_id)
 
-    # Build conversation context from session history
-    context = _build_context(db, session_id) if db else ""
+    history_messages = (
+        ContextBuilder(db).build_history_messages(
+            session_id, exclude_message_id=current_message_id
+        )
+        if db else []
+    )
 
     # ── Normal mode: simple neutral chat ──
     if session_mode == "normal":
@@ -298,16 +321,14 @@ async def handle_message(
 
         if is_interview_rel:
             sys_msg = "你是资深面试教练。基于用户简历、岗位信息和对话历史，帮用户打磨面试回答。"
-            user_msg = _build_free_text_context(profile_data, jd_analysis, content, context)
+            user_msg = _build_free_text_context(profile_data, jd_analysis, content, "")
             messages = [{"role": "system", "content": sys_msg}]
-            if db:
-                messages += _get_recent_messages(db, session_id)
+            messages += history_messages
             messages.append({"role": "user", "content": user_msg})
         else:
             sys_msg = "你是一个有用的AI助手。回答简洁直接。"
             messages = [{"role": "system", "content": sys_msg}]
-            if db and context:
-                messages += _get_recent_messages(db, session_id)
+            messages += history_messages
             messages.append({"role": "user", "content": content})
 
         async for chunk in _native_thinking_stream(messages, temperature=0.5, model=model):
@@ -320,8 +341,11 @@ async def handle_message(
 
     # Auto-classify intent if no explicit command
     explicit_command = bool(command)
-    effective_command = command or classify_interview_intent(content)
-    recent_msgs = _get_recent_messages(db, session_id) if db else []
+    effective_command = (
+        resolved_intent if intent_is_resolved
+        else command or classify_interview_intent(content)
+    )
+    recent_msgs = history_messages
 
     if effective_command == "/intro":
         extra = content.replace("/intro", "").strip() if explicit_command else content.strip()
@@ -372,7 +396,7 @@ async def handle_message(
     else:
         # No clear intent → general interview coaching with full context
         sys_msg = "你是资深面试教练。基于用户提供的简历、岗位信息和知识库，回答用户关于面试、技术、职业发展等方面的问题。回答要具体、有针对性，引用用户的真实经历和技能。如果你之前已经回答过类似的问题，请在之前回答的基础上优化调整，无需从零重新生成。"
-        user_msg = _build_free_text_context(profile_data, jd_analysis, content, context)
+        user_msg = _build_free_text_context(profile_data, jd_analysis, content, "")
         if template_rules:
             if template_rules.get("structure"):
                 user_msg += f"\n用户指定的结构规则：{template_rules['structure']}"
@@ -387,49 +411,8 @@ async def handle_message(
 
 
 def build_profile_data_for_prompt(db: Session, profile_id: int = 1) -> dict:
-    """从数据库组装 profile_data + 附加文档文本用于 Prompt 注入（仅加载 is_active=True 的数据）。"""
-    import json as _json
-    from backend.src.models.document import SourceDocument
-    from sqlmodel import select as _sel
-
-    profile = db.get(profile_service.UserProfile, profile_id) or profile_service.get_or_create_profile(db)
-    internships = profile_service.list_internships(db, profile.id)
-    projects = profile_service.list_projects(db, profile.id)
-    skills_list = profile_service.list_skills(db, profile.id)
-
-    # Load active attached documents
-    profile_docs = db.exec(
-        _sel(SourceDocument)
-        .where(SourceDocument.profile_id == profile.id)
-        .where(SourceDocument.scope == "profile")
-        .where(SourceDocument.usage == "attach")
-        .where(SourceDocument.is_active == True)  # type: ignore[arg-type]
-        .where(SourceDocument.extracted_text.isnot(None))  # type: ignore[arg-type]
-    ).all()
-    jd_docs = db.exec(
-        _sel(SourceDocument)
-        .where(SourceDocument.profile_id == profile.id)
-        .where(SourceDocument.scope == "jd")
-        .where(SourceDocument.usage == "attach")
-        .where(SourceDocument.is_active == True)  # type: ignore[arg-type]
-        .where(SourceDocument.extracted_text.isnot(None))  # type: ignore[arg-type]
-    ).all()
-
-    return {
-        "name": profile.name,
-        "internships": [
-            {"company": i.company, "position": i.position, "achievements": _json.loads(i.achievements or "[]")}
-            for i in internships
-        ],
-        "projects": [
-                {"name": p.name, "role": p.role, "tech_stack": _json.loads(p.tech_stack or "[]"),
-                 "challenge": p.challenge, "solution": p.solution, "result": p.result}
-                for p in projects
-            ],
-            "skills": [{"category": sk.category, "name": sk.name, "proficiency": sk.proficiency} for sk in skills_list],
-            "profile_docs": [{"filename": d.filename, "text": d.extracted_text[:3000]} for d in profile_docs if d.extracted_text],
-            "jd_docs": [{"filename": d.filename, "text": d.extracted_text[:3000]} for d in jd_docs if d.extracted_text],
-        }
+    """兼容入口：统一委托给 ContextBuilder。"""
+    return ContextBuilder(db).load_profile_data(profile_id)
 
 
 def _build_profile_summary(profile_data: dict, jd_analysis: dict | None) -> str:
@@ -464,50 +447,7 @@ def _build_profile_summary(profile_data: dict, jd_analysis: dict | None) -> str:
 
 
 def _build_free_text_context(profile_data: dict, jd_analysis: dict | None, content: str, context: str) -> str:
-    """为自由对话构建包含完整知识库上下文的 user message。"""
-    import json as _json
-
-    sections = []
-
-    # Structured profile
-    profile_parts = [f"姓名：{profile_data.get('name','')}"]
-    for exp in profile_data.get("internships", []):
-        ach = exp.get("achievements", [])
-        profile_parts.append(f"实习：{exp['company']} {exp['position']} · 成果：{'；'.join(ach[:3])}")
-    for proj in profile_data.get("projects", []):
-        profile_parts.append(f"项目：{proj['name']}（角色：{proj['role']}）· 挑战：{proj['challenge']} · 方案：{proj['solution']} · 结果：{proj['result']}")
-    skills_by_cat = {}
-    for s in profile_data.get("skills", []):
-        skills_by_cat.setdefault(s["category"], []).append(f"{s['name']}({s['proficiency']})")
-    for cat, items in skills_by_cat.items():
-        profile_parts.append(f"技能-{cat}：{', '.join(items)}")
-    sections.append("【用户简历】\n" + "\n".join(profile_parts))
-
-    # JD analysis
-    if jd_analysis:
-        jd_parts = []
-        if jd_analysis.get("core_skills"):
-            jd_parts.append(f"核心技能要求：{', '.join(jd_analysis['core_skills'])}")
-        if jd_analysis.get("duties"):
-            jd_parts.append(f"主要职责：{', '.join(jd_analysis['duties'])}")
-        if jd_analysis.get("culture_values"):
-            jd_parts.append(f"公司价值观/方向：{', '.join(jd_analysis['culture_values'])}")
-        if jd_parts:
-            sections.append("【目标岗位信息】\n" + "；".join(jd_parts))
-    else:
-        sections.append("【目标岗位信息】\n通用面试模式（未提供岗位信息）")
-
-    # Attached documents
-    for doc in profile_data.get("profile_docs", []):
-        sections.append(f"【附加个人素材-{doc['filename']}】\n{doc['text']}")
-    for doc in profile_data.get("jd_docs", []):
-        sections.append(f"【附加公司素材-{doc['filename']}】\n{doc['text']}")
-
-    # Conversation history
-    if context:
-        sections.append(f"【对话历史】\n{context}")
-
-    # Current question
-    sections.append(f"【当前问题】\n{content}")
-
-    return "\n\n".join(sections)
+    """统一构建知识上下文；历史仅作为原生 messages 注入，避免重复。"""
+    return ContextBuilder(None).build_knowledge_context(
+        profile_data, jd_analysis, content
+    )

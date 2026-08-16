@@ -5,23 +5,18 @@ from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 from sqlmodel import Session
 
-from backend.src.db.connection import get_session
+from backend.src.db.connection import engine, get_session
 from backend.src.services import profile_service, session_service, conversation_service
-from backend.src.llm.client import llm_client
-from backend.src.models.job_context import JobContext
 from backend.src.api.settings import LLM_PROVIDERS
+from backend.src.services.context_builder import ContextBuilder
+from backend.src.services.generation_guard import (
+    generation_guard,
+    public_generation_error,
+    validate_owned_session,
+)
+from backend.src.services.memory_service import refresh_conversation_summary
 
 router = APIRouter(prefix="/api", tags=["generate"])
-
-import time
-
-# Session-level concurrency lock: prevent duplicate LLM calls for the same session
-_active_generations: dict[int, bool] = {}
-# Rate limiter: max 10 requests per 30 seconds per session
-_rate_limit: dict[int, list[float]] = {}
-_RATE_LIMIT_MAX = 10
-_RATE_LIMIT_WINDOW = 30.0
-
 
 @router.post("/generate")
 async def generate(request: Request, session: Session = Depends(get_session)):
@@ -36,56 +31,57 @@ async def generate(request: Request, session: Session = Depends(get_session)):
     command = body.get("command")
     template_id = body.get("template_id")
 
-    if not session_id:
+    if not isinstance(session_id, int) or session_id <= 0:
         return EventSourceResponse(_error("缺少 session_id"))
 
-    # Rate limit check
-    now = time.time()
-    window = _rate_limit.get(session_id, [])
-    window = [t for t in window if now - t < _RATE_LIMIT_WINDOW]
-    if len(window) >= _RATE_LIMIT_MAX:
-        return EventSourceResponse(_error("请求过于频繁，请稍后再试"))
-    window.append(now)
-    _rate_limit[session_id] = window
-
-    # Concurrency check: only one generation per session at a time
-    if _active_generations.get(session_id):
-        return EventSourceResponse(_error("上一个请求尚未完成，请稍后"))
-
-    _active_generations[session_id] = True
-
-    # Reconfigure LLM from user settings (API key / provider / model from DB)
-    _apply_llm_settings(session)
-
-    # Profile data + session mode (use active profile only)
     profile = profile_service.get_active_profile(session)
-    profile_data = conversation_service.build_profile_data_for_prompt(session, profile.id if profile else 1)
-    conv_sess = session_service.get_session(session, session_id)
-    session_mode = conv_sess.mode if conv_sess else "normal"
+    try:
+        conv_sess = validate_owned_session(session, session_id, profile.id)
+    except Exception as exc:
+        return EventSourceResponse(_error(public_generation_error(exc)))
 
-    # Load active JD context (is_active=True, not just latest)
-    jd_analysis = None
-    jc = session.exec(
-        __import__("sqlmodel").select(JobContext)
-        .where(JobContext.profile_id == profile.id)
-        .where(JobContext.is_active == True)  # noqa: E712
-        .order_by(JobContext.id.desc())
-    ).first()
-    if jc:
-        jd_analysis = jc.to_analysis_dict()
+    guard_key = f"session:{session_id}"
+    guard_error = generation_guard.try_acquire(guard_key)
+    if guard_error:
+        return EventSourceResponse(_error(guard_error))
 
-    # Add user message to session
-    session_service.add_message(
-        session, session_id, role="user", content=content,
-        msg_type=_type_from_command(command), command=command
-    )
+    try:
+        # Reconfigure LLM from user settings (API key / provider / model from DB)
+        _apply_llm_settings(session)
+        builder = ContextBuilder(session)
+        profile_data = builder.load_profile_data(profile.id)
+        session_mode = conv_sess.mode
+        jd_analysis = builder.load_active_jd(profile.id)
+
+        # Add user message only after ownership and guard checks pass.
+        user_message = session_service.add_message(
+            session, session_id, role="user", content=content,
+            msg_type=_type_from_command(command), command=command
+        )
+        # ORM objects become detached when FastAPI closes the request dependency
+        # before consuming the SSE body. Keep only the scalar value in the stream.
+        user_message_id = user_message.id
+    except Exception as exc:
+        generation_guard.release(guard_key)
+        import logging
+        logging.getLogger("speakwise").error("生成准备失败: %s", exc, exc_info=True)
+        return EventSourceResponse(_error(public_generation_error(exc)))
 
     # Collect assistant response + thinking
     full_response = ""
     full_thinking = ""
 
-    async def _stream():
+    async def _stream(stream_session: Session):
         nonlocal full_response, full_thinking
+
+        effective_intent = command
+        if session_mode == "interview" and not effective_intent:
+            effective_intent = await conversation_service.classify_interview_intent_hybrid(
+                content,
+                db=stream_session,
+                session_id=session_id,
+                current_message_id=user_message_id,
+            )
 
         # ── Phase 1: System context summary (one flowing narrative) ──
         yield {"event": "meta", "data": json.dumps({
@@ -101,9 +97,10 @@ async def generate(request: Request, session: Session = Depends(get_session)):
             if command:
                 system_lines.append(f"当前为面试对话模式，用户使用了显式命令 {command}")
             else:
-                intent = conversation_service.classify_interview_intent(content)
-                intent_label = {"intro": "自我介绍", "scenario": "场景题", "technical": "技术题"}.get(
-                    (intent or "").replace("/", ""), "通用问答")
+                intent_label = {
+                    "intro": "自我介绍", "scenario": "场景题",
+                    "technical": "技术题", "followup": "模拟追问",
+                }.get((effective_intent or "").replace("/", ""), "通用问答")
                 system_lines.append(f"当前为面试对话模式，我识别到用户意图为「{intent_label}」")
         else:
             is_rel, _ = conversation_service.classify_message(content)
@@ -139,7 +136,7 @@ async def generate(request: Request, session: Session = Depends(get_session)):
         # Model + Template
         if session_mode == "interview":
             model = conversation_service.llm_client.model
-            tpl_name = (command or conversation_service.classify_interview_intent(content) or "通用").replace("/", "")
+            tpl_name = (effective_intent or "通用").replace("/", "")
             system_lines.append(f"使用 {model} 模型和 {tpl_name} 提示词模板")
         else:
             is_interview, model = conversation_service.classify_message(f"{command or ''} {content}")
@@ -151,10 +148,15 @@ async def generate(request: Request, session: Session = Depends(get_session)):
         # ── Phase 2: LLM streaming ──
         first_chunk = True
         try:
+            await refresh_conversation_summary(
+                stream_session, session_id, exclude_message_id=user_message_id
+            )
             async for chunk in conversation_service.handle_message(
                 session_id=session_id, content=content, command=command,
                 profile_data=profile_data, jd_analysis=jd_analysis,
-                template_id=template_id, db=session, session_mode=session_mode,
+                template_id=template_id, db=stream_session, session_mode=session_mode,
+                current_message_id=user_message_id,
+                resolved_intent=effective_intent, intent_is_resolved=True,
             ):
                 chunk_type = chunk.get("type", "token")
                 text = chunk.get("content", "")
@@ -174,13 +176,13 @@ async def generate(request: Request, session: Session = Depends(get_session)):
         except Exception as e:
             import logging
             logging.getLogger("speakwise").error("生成失败: %s", e, exc_info=True)
-            yield {"event": "error", "data": "生成失败，请重试"}
+            yield {"event": "error", "data": public_generation_error(e)}
             return
 
         # Save assistant message (with thinking if any)
         session_service.add_message(
-            session, session_id, role="assistant", content=full_response,
-            msg_type=_type_from_command(command), command=command,
+            stream_session, session_id, role="assistant", content=full_response,
+            msg_type=_type_from_command(effective_intent), command=effective_intent,
             thinking=full_thinking or None,
         )
 
@@ -192,10 +194,13 @@ async def generate(request: Request, session: Session = Depends(get_session)):
 
     async def _wrapped_stream():
         try:
-            async for event in _stream():
-                yield event
+            # A request dependency may be closed before StreamingResponse finishes.
+            # Own the DB session for exactly the lifetime of the SSE iteration.
+            with Session(engine) as stream_session:
+                async for event in _stream(stream_session):
+                    yield event
         finally:
-            _active_generations.pop(session_id, None)
+            generation_guard.release(guard_key)
 
     return EventSourceResponse(_wrapped_stream())
 
