@@ -5,6 +5,7 @@ from sqlmodel import Session
 
 from backend.src.db.connection import get_session
 from backend.src.services import profile_service
+from backend.src.services import skill_categorizer
 
 router = APIRouter(prefix="/api", tags=["profile"])
 
@@ -157,6 +158,66 @@ def delete_skill_endpoint(item_id: int, session: Session = Depends(get_session))
     if not profile_service.delete_skill(session, item_id):
         raise HTTPException(404, "记录不存在")
     return {"ok": True}
+
+
+@router.post("/skills/classification/preview")
+async def preview_skill_classification(data: dict = Body(...), session: Session = Depends(get_session)):
+    skills = data.get("skills")
+    if not isinstance(skills, list):
+        raise HTTPException(422, "skills 必须为列表")
+
+    incoming_ids = []
+    for item in skills:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), int) or isinstance(item["id"], bool):
+            raise HTTPException(422, "skills 格式无效")
+        incoming_ids.append(item["id"])
+
+    profile = profile_service.get_active_profile(session)
+    active_skills = profile_service.list_skills(session, profile.id)
+    active_by_id = {skill.id: skill for skill in active_skills}
+    if len(incoming_ids) != len(set(incoming_ids)) or set(incoming_ids) != set(active_by_id):
+        raise HTTPException(422, "技能必须属于当前活跃简历")
+
+    classification_input = [
+        {
+            "id": item_id,
+            "name": active_by_id[item_id].name,
+            "category": active_by_id[item_id].category,
+        }
+        for item_id in incoming_ids
+    ]
+    try:
+        return await skill_categorizer.classify_existing_skills(classification_input)
+    except Exception as exc:
+        raise HTTPException(502, "技能分类暂时不可用，请稍后重试") from exc
+
+
+@router.post("/skills/classification/apply")
+def apply_skill_classification(data: dict = Body(...), session: Session = Depends(get_session)):
+    assignments = data.get("assignments")
+    if not isinstance(assignments, list):
+        raise HTTPException(422, "assignments 必须为列表")
+
+    normalized_assignments = []
+    for assignment in assignments:
+        if (
+            not isinstance(assignment, dict)
+            or not isinstance(assignment.get("id"), int)
+            or isinstance(assignment["id"], bool)
+            or not isinstance(assignment.get("category"), str)
+        ):
+            raise HTTPException(422, "assignments 格式无效")
+        normalized_assignments.append({
+            "id": assignment["id"],
+            "category": skill_categorizer.normalize_category(assignment["category"]),
+        })
+
+    profile = profile_service.get_active_profile(session)
+    try:
+        updated = profile_service.apply_skill_categories(session, profile.id, normalized_assignments)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return [_skill_out(skill) for skill in updated]
 
 
 # ── Output helpers ───────────────────────────────────────

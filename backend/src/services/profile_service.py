@@ -254,3 +254,30 @@ def delete_skill(session: Session, item_id: int) -> bool:
     if not item: return False
     session.delete(item); session.commit()
     return True
+
+
+def apply_skill_categories(session: Session, profile_id: int, assignments: list[dict]) -> list[Skill]:
+    """Atomically apply normalized categories to skills owned by one profile."""
+    from backend.src.services.skill_categorizer import normalize_category
+
+    assignment_ids = [assignment["id"] for assignment in assignments]
+    if len(assignment_ids) != len(set(assignment_ids)):
+        raise ValueError("技能分类不能重复")
+
+    skills = list(session.exec(select(Skill).where(Skill.id.in_(assignment_ids))).all())
+    skills_by_id = {skill.id: skill for skill in skills}
+    if any(skill_id not in skills_by_id or skills_by_id[skill_id].profile_id != profile_id for skill_id in assignment_ids):
+        raise ValueError("技能必须属于当前活跃简历")
+
+    for assignment in assignments:
+        skill = skills_by_id[assignment["id"]]
+        skill.category = normalize_category(assignment["category"])
+        session.add(skill)
+    session.commit()
+
+    updated = []
+    for assignment in assignments:
+        skill = skills_by_id[assignment["id"]]
+        session.refresh(skill)
+        updated.append(skill)
+    return updated
