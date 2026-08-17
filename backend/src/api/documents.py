@@ -290,7 +290,11 @@ async def _llm_parse_resume(text: str) -> list[dict]:
 
 简历文本：
 {text[:8000]}"""
-    prompt += "\\n技能 category 只能从以下固定键中选择，每项技能只能选择一个类别：" + json.dumps(SKILL_CATEGORIES, ensure_ascii=False)
+    prompt = prompt.replace(
+        "language|framework|tool|other",
+        "programming_language|frontend_client|backend_data|ai_algorithm|agent_llm|cloud_devops|software_engineering|other",
+    )
+    prompt += "\n技能 category 只能从以下固定键中选择，每项技能只能选择一个类别：" + json.dumps(SKILL_CATEGORIES, ensure_ascii=False)
 
     try:
         resp = await llm_client.chat(

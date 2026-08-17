@@ -6,7 +6,10 @@ from backend.src.llm import client as llm_client_module
 
 @pytest.mark.asyncio
 async def test_resume_import_normalizes_skills_to_fixed_categories(monkeypatch) -> None:
+    captured = {}
+
     async def fake_chat(messages, temperature=0.1, model=None):
+        captured["prompt"] = messages[0]["content"]
         return (
             '{"skills": ['
             '{"category":"agent_llm","name":"LangGraph","proficiency":"熟悉"},'
@@ -23,3 +26,5 @@ async def test_resume_import_normalizes_skills_to_fixed_categories(monkeypatch) 
         "agent_llm",
         "other",
     ]
+    assert "language|framework|tool|other" not in captured["prompt"]
+    assert "\n技能 category 只能从以下固定键中选择" in captured["prompt"]
