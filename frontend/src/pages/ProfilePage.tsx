@@ -1,6 +1,6 @@
 /** 个人知识库页面 —— 录入/编辑/删除 + 文档导入与解析确认 + 多简历管理 */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiDelete } from "../lib/api";
 import { Plus, Trash2, Save, Edit3 } from "lucide-react";
@@ -25,6 +25,7 @@ export default function ProfilePage() {
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [classificationPreview, setClassificationPreview] = useState<SkillClassificationPreview[] | null>(null);
   const [classifying, setClassifying] = useState(false);
+  const classificationApplying = useRef(false);
   const { data: resumes = [] } = useQuery<ResumeItem[]>({ queryKey: ["resumes"], queryFn: () => apiGet("/api/resumes") });
   const { data: profile } = useQuery<Profile>({ queryKey: ["profile"], queryFn: () => apiGet("/api/profile") });
   const { data: internships = [] } = useQuery<Internship[]>({ queryKey: ["internships"], queryFn: () => apiGet("/api/experiences?type=internship") });
@@ -96,6 +97,8 @@ export default function ProfilePage() {
   };
 
   const handleClassificationConfirm = async (assignments: { id: number; category: string }[]) => {
+    if (classificationApplying.current) return;
+    classificationApplying.current = true;
     setClassifying(true);
     try {
       await apiPost("/api/skills/classification/apply", { assignments });
@@ -105,6 +108,7 @@ export default function ProfilePage() {
     } catch {
       toast.error("保存技能分类失败");
     } finally {
+      classificationApplying.current = false;
       setClassifying(false);
     }
   };
@@ -268,6 +272,7 @@ export default function ProfilePage() {
       {classificationPreview && (
         <SkillClassificationDialog
           preview={classificationPreview}
+          saving={classifying}
           onCancel={() => setClassificationPreview(null)}
           onConfirm={handleClassificationConfirm}
         />

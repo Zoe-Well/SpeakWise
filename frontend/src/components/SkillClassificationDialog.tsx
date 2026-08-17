@@ -11,9 +11,10 @@ interface Props {
   preview: SkillClassificationPreview[];
   onCancel: () => void;
   onConfirm: (assignments: { id: number; category: string }[]) => void;
+  saving?: boolean;
 }
 
-export default function SkillClassificationDialog({ preview, onCancel, onConfirm }: Props) {
+export default function SkillClassificationDialog({ preview, onCancel, onConfirm, saving = false }: Props) {
   const groups = SKILL_CATEGORIES.map((category) => ({
     ...category,
     skills: preview.filter((skill) => skillCategoryLabel(skill.suggested_category) === category.label),
@@ -39,10 +40,14 @@ export default function SkillClassificationDialog({ preview, onCancel, onConfirm
           </div>
         </div>
         <div className="px-5 py-3 border-t border-zinc-200 flex justify-end gap-2">
-          <button onClick={onCancel} className="px-4 py-2 border border-zinc-200 rounded-lg text-sm hover:bg-zinc-50 text-zinc-600">取消</button>
+          <button disabled={saving} onClick={onCancel} className="px-4 py-2 border border-zinc-200 rounded-lg text-sm hover:bg-zinc-50 text-zinc-600 disabled:opacity-50">取消</button>
           <button
-            onClick={() => onConfirm(preview.map(({ id, suggested_category: category }) => ({ id, category })))}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"
+            disabled={saving}
+            onClick={() => onConfirm(preview.map(({ id, suggested_category }) => ({
+              id,
+              category: SKILL_CATEGORIES.some(({ key }) => key === suggested_category) ? suggested_category : "other",
+            })))}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"
           >确认保存</button>
         </div>
       </div>

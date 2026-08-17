@@ -25,12 +25,12 @@ describe("SkillClassificationDialog", () => {
     expect(screen.queryByRole("heading", { name: "前端与客户端" })).toBeNull();
   });
 
-  it("only supplies suggested assignments when the user confirms", () => {
+  it("normalizes unknown suggestions to other only when the user confirms", () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();
     render(
       <SkillClassificationDialog
-        preview={[{ id: 1, name: "Python", current_category: "other", suggested_category: "programming_language" }]}
+        preview={[{ id: 1, name: "Python", current_category: "other", suggested_category: "unknown" }]}
         onCancel={onCancel}
         onConfirm={onConfirm}
       />,
@@ -41,6 +41,28 @@ describe("SkillClassificationDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "确认保存" }));
-    expect(onConfirm).toHaveBeenCalledWith([{ id: 1, category: "programming_language" }]);
+    expect(onConfirm).toHaveBeenCalledWith([{ id: 1, category: "other" }]);
+  });
+
+  it("disables both actions while saving", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <SkillClassificationDialog
+        preview={[{ id: 1, name: "Python", current_category: "other", suggested_category: "programming_language" }]}
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+        saving
+      />,
+    );
+
+    const cancel = screen.getByRole("button", { name: "取消" }) as HTMLButtonElement;
+    const confirm = screen.getByRole("button", { name: "确认保存" }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(cancel);
+    fireEvent.click(confirm);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 });

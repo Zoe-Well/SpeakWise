@@ -150,4 +150,33 @@ describe("ProfilePage skills", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(toast.success).toHaveBeenCalledWith("技能分类已保存");
   });
+
+  it("disables preview actions and submits apply only once while saving", async () => {
+    const preview = [{ id: 1, name: "LangGraph", current_category: "agent_llm", suggested_category: "agent_llm" }];
+    let resolveApply!: () => void;
+    const applyPending = new Promise<void>((resolve) => { resolveApply = resolve; });
+    api.apiPost.mockImplementation((path: string) => {
+      if (path === "/api/skills/classification/preview") return Promise.resolve(preview);
+      if (path === "/api/skills/classification/apply") return applyPending;
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    await screen.findByText("LangGraph");
+    fireEvent.click(screen.getByRole("button", { name: "AI 智能整理" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认保存" }));
+
+    await waitFor(() => {
+      expect((within(dialog).getByRole("button", { name: "取消" }) as HTMLButtonElement).disabled).toBe(true);
+      expect((within(dialog).getByRole("button", { name: "确认保存" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(api.apiPost.mock.calls.filter(([path]) => path === "/api/skills/classification/apply")).toHaveLength(1);
+    expect(screen.getByRole("dialog")).not.toBeNull();
+
+    resolveApply();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
 });
