@@ -7,6 +7,7 @@ import { Plus, Trash2, Save, Edit3 } from "lucide-react";
 import DocumentImport from "../components/DocumentImport";
 import ConfirmMergeDialog from "../components/ConfirmMergeDialog";
 import ApiKeyRequiredDialog from "../components/ApiKeyRequiredDialog";
+import SkillClassificationDialog, { type SkillClassificationPreview } from "../components/SkillClassificationDialog";
 import { EditableInternship, EditableProject } from "../components/EditableItem";
 import { useLLMStatus } from "../lib/useLLMStatus";
 import { useToast } from "../components/Toast";
@@ -22,6 +23,8 @@ export default function ProfilePage() {
   const toast = useToast();
   const { isConfigured: llmConfigured } = useLLMStatus();
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
+  const [classificationPreview, setClassificationPreview] = useState<SkillClassificationPreview[] | null>(null);
+  const [classifying, setClassifying] = useState(false);
   const { data: resumes = [] } = useQuery<ResumeItem[]>({ queryKey: ["resumes"], queryFn: () => apiGet("/api/resumes") });
   const { data: profile } = useQuery<Profile>({ queryKey: ["profile"], queryFn: () => apiGet("/api/profile") });
   const { data: internships = [] } = useQuery<Internship[]>({ queryKey: ["internships"], queryFn: () => apiGet("/api/experiences?type=internship") });
@@ -75,6 +78,35 @@ export default function ProfilePage() {
     qc.invalidateQueries({ queryKey: ["projects"] });
     qc.invalidateQueries({ queryKey: ["skills"] });
     qc.invalidateQueries({ queryKey: ["documents","all"] });
+  };
+
+  const handleClassificationPreview = async () => {
+    if (!llmConfigured) { setShowApiKeyDialog(true); return; }
+    setClassifying(true);
+    try {
+      const preview = await apiPost<SkillClassificationPreview[]>("/api/skills/classification/preview", {
+        skills: skills.map(({ id, name }) => ({ id, name })),
+      });
+      setClassificationPreview(preview);
+    } catch {
+      toast.error("智能整理失败");
+    } finally {
+      setClassifying(false);
+    }
+  };
+
+  const handleClassificationConfirm = async (assignments: { id: number; category: string }[]) => {
+    setClassifying(true);
+    try {
+      await apiPost("/api/skills/classification/apply", { assignments });
+      setClassificationPreview(null);
+      qc.invalidateQueries({ queryKey: ["skills"] });
+      toast.success("技能分类已保存");
+    } catch {
+      toast.error("保存技能分类失败");
+    } finally {
+      setClassifying(false);
+    }
   };
 
   // 文档解析确认弹窗
@@ -233,6 +265,14 @@ export default function ProfilePage() {
         />
       )}
 
+      {classificationPreview && (
+        <SkillClassificationDialog
+          preview={classificationPreview}
+          onCancel={() => setClassificationPreview(null)}
+          onConfirm={handleClassificationConfirm}
+        />
+      )}
+
       {/* Profile */}
       <ProfileForm profile={profile} onSaved={() => qc.invalidateQueries({ queryKey: ["profile"] })} />
 
@@ -268,7 +308,14 @@ export default function ProfilePage() {
       <section className="bg-white border border-zinc-200 rounded-xl p-5 mb-5">
         <div className="flex justify-between items-center mb-3">
           <h3 className="font-semibold">🛠 技术栈</h3>
-          <AddSkillBtn onAdded={() => qc.invalidateQueries({ queryKey: ["skills"] })} />
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={handleClassificationPreview}
+              disabled={classifying || skills.length === 0}
+              className="text-xs text-indigo-600 border border-indigo-200 rounded-lg px-3 py-1 hover:bg-indigo-50 disabled:opacity-50"
+            >{classifying ? "整理中…" : "AI 智能整理"}</button>
+            <AddSkillBtn onAdded={() => qc.invalidateQueries({ queryKey: ["skills"] })} />
+          </div>
         </div>
         <div className="space-y-3">
           {skillGroups.map((group) => (
