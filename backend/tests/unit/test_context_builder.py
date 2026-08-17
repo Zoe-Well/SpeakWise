@@ -80,6 +80,7 @@ def test_profile_skill_groups_use_chinese_category_labels() -> None:
         "projects": [],
         "skills": [
             {"category": "agent_llm", "name": "RAG", "proficiency": "熟悉"},
+            {"category": "other", "name": "Git", "proficiency": "熟悉"},
             {"category": "unknown_category", "name": "Other", "proficiency": "了解"},
         ],
         "profile_docs": [],
@@ -89,7 +90,8 @@ def test_profile_skill_groups_use_chinese_category_labels() -> None:
     rendered = builder.format_profile(profile_data, include_documents=False)
 
     assert "技能-Agent 与 LLM 应用：RAG(熟悉)" in rendered
-    assert "技能-其他：Other(了解)" in rendered
+    assert rendered.count("技能-其他：") == 1
+    assert "技能-其他：Git(熟悉), Other(了解)" in rendered
     assert "agent_llm" not in rendered
     assert "unknown_category" not in rendered
 

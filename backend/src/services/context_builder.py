@@ -191,11 +191,11 @@ class ContextBuilder:
             )
         skills_by_category: dict[str, list[str]] = {}
         for skill in profile_data.get("skills", []):
-            skills_by_category.setdefault(skill.get("category", "other"), []).append(
+            skills_by_category.setdefault(category_label(skill.get("category")), []).append(
                 f"{skill.get('name', '')}({skill.get('proficiency', '')})"
             )
         for category, skills in skills_by_category.items():
-            parts.append(f"技能-{category_label(category)}：{', '.join(skills)}")
+            parts.append(f"技能-{category}：{', '.join(skills)}")
 
         rendered = _clip("\n".join(parts), self.budgets.profile)
         if not include_documents:
