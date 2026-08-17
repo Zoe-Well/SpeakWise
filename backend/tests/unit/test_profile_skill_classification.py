@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import SQLModel, Session, create_engine, select
 
 from backend.src.api import profile as profile_api
 from backend.src.db.connection import get_session
@@ -40,6 +40,38 @@ def skill_api() -> Generator[tuple[TestClient, Session, UserProfile, UserProfile
         yield client, session, active, other
     app.dependency_overrides.clear()
     session.close()
+
+
+@pytest.fixture
+def empty_skill_api() -> Generator[tuple[TestClient, Session], None, None]:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    session = Session(engine)
+
+    app = FastAPI()
+    app.include_router(profile_api.router)
+
+    def override_session():
+        yield session
+
+    app.dependency_overrides[get_session] = override_session
+    with TestClient(app) as client:
+        yield client, session
+    app.dependency_overrides.clear()
+    session.close()
+
+
+def test_preview_on_empty_database_returns_404_without_creating_profile(empty_skill_api) -> None:
+    client, session = empty_skill_api
+
+    response = client.post("/api/skills/classification/preview", json={"skills": []})
+
+    assert response.status_code == 404
+    assert session.exec(select(UserProfile)).all() == []
 
 
 def test_preview_returns_suggestions_without_changing_database_category(skill_api, monkeypatch) -> None:
@@ -83,6 +115,25 @@ def test_preview_returns_suggestions_without_changing_database_category(skill_ap
     }]
     session.refresh(skill)
     assert skill.category == "backend_data"
+
+
+def test_preview_rejects_skill_id_set_that_does_not_match_active_profile(skill_api) -> None:
+    client, session, active, _ = skill_api
+    skill = Skill(
+        profile_id=active.id,
+        category="backend_data",
+        name="FastAPI",
+        proficiency="熟悉",
+    )
+    session.add(skill)
+    session.commit()
+
+    response = client.post(
+        "/api/skills/classification/preview",
+        json={"skills": []},
+    )
+
+    assert response.status_code == 422
 
 
 def test_apply_rejects_other_profile_skill_without_partial_update(skill_api) -> None:
@@ -168,6 +219,29 @@ def test_apply_persists_multiple_categories_in_one_commit_and_returns_updates(sk
     session.refresh(first_skill)
     session.refresh(second_skill)
     assert [first_skill.category, second_skill.category] == ["agent_llm", "cloud_devops"]
+
+
+def test_apply_normalizes_unknown_category_to_other(skill_api) -> None:
+    client, session, active, _ = skill_api
+    skill = Skill(
+        profile_id=active.id,
+        category="backend_data",
+        name="FastAPI",
+        proficiency="熟悉",
+    )
+    session.add(skill)
+    session.commit()
+    session.refresh(skill)
+
+    response = client.post(
+        "/api/skills/classification/apply",
+        json={"assignments": [{"id": skill.id, "category": "framework"}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["category"] == "other"
+    session.refresh(skill)
+    assert skill.category == "other"
 
 
 def test_apply_rejects_non_list_assignments(skill_api) -> None:

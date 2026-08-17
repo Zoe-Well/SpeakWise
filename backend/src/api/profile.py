@@ -1,9 +1,10 @@
 """知识库 API 路由"""
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from backend.src.db.connection import get_session
+from backend.src.models.profile import UserProfile
 from backend.src.services import profile_service
 from backend.src.services import skill_categorizer
 
@@ -172,7 +173,11 @@ async def preview_skill_classification(data: dict = Body(...), session: Session 
             raise HTTPException(422, "skills 格式无效")
         incoming_ids.append(item["id"])
 
-    profile = profile_service.get_active_profile(session)
+    profile = session.exec(
+        select(UserProfile).where(UserProfile.is_active == True)  # noqa: E712
+    ).first()
+    if not profile:
+        raise HTTPException(404, "当前没有活跃简历")
     active_skills = profile_service.list_skills(session, profile.id)
     active_by_id = {skill.id: skill for skill in active_skills}
     if len(incoming_ids) != len(set(incoming_ids)) or set(incoming_ids) != set(active_by_id):
