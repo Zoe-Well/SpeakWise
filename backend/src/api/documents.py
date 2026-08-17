@@ -10,6 +10,7 @@ from backend.src.db.connection import get_session
 from backend.src.services import profile_service
 from backend.src.models.document import SourceDocument, ProfileUpdateProposal
 from backend.src.services.generation_guard import generation_guard
+from backend.src.services.skill_categorizer import SKILL_CATEGORIES, normalize_category
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,7 @@ async def _llm_parse_resume(text: str) -> list[dict]:
 
 简历文本：
 {text[:8000]}"""
+    prompt += "\\n技能 category 只能从以下固定键中选择，每项技能只能选择一个类别：" + json.dumps(SKILL_CATEGORIES, ensure_ascii=False)
 
     try:
         resp = await llm_client.chat(
@@ -336,6 +338,9 @@ async def _llm_parse_resume(text: str) -> list[dict]:
             proposals.append({"id": f"c{idx}", "op": "add", "target": "skill",
                               "value": item, "conflict": False})
 
+    for proposal in proposals:
+        if proposal.get("target") == "skill" and isinstance(proposal.get("value"), dict):
+            proposal["value"]["category"] = normalize_category(proposal["value"].get("category"))
     return proposals
 
 
