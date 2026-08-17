@@ -34,4 +34,4 @@ def test_mode_and_memory_migrations_are_idempotent(monkeypatch) -> None:
             row[1] for row in conn.execute(text("PRAGMA table_info(conversation_sessions)"))
         }
     assert mode == "normal"
-        assert {"memory_summary", "summary_up_to_message_id"}.issubset(columns)
+    assert {"memory_summary", "summary_up_to_message_id"}.issubset(columns)
