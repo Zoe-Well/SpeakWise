@@ -10,11 +10,11 @@ import ApiKeyRequiredDialog from "../components/ApiKeyRequiredDialog";
 import { EditableInternship, EditableProject } from "../components/EditableItem";
 import { useLLMStatus } from "../lib/useLLMStatus";
 import { useToast } from "../components/Toast";
+import { groupSkillsByCategory, SKILL_CATEGORIES, type Skill } from "../lib/skillCategories";
 
 interface Profile { id: number; name: string; phone?: string; email?: string; is_active?: boolean; }
 interface Internship { id: number; company: string; position: string; start_date: string; end_date?: string; achievements: string[]; }
 interface Project { id: number; type: string; name: string; role: string; tech_stack: string[]; challenge: string; solution: string; result: string; }
-interface Skill { id: number; category: string; name: string; proficiency: string; }
 interface ResumeItem { id: number; name: string; is_active: boolean; internship_count: number; project_count: number; skill_count: number; }
 
 export default function ProfilePage() {
@@ -33,6 +33,7 @@ export default function ProfilePage() {
   });
   const profileDocs = allDocs.filter(d => d.scope === "profile");
   const jdDocs = allDocs.filter(d => d.scope === "jd");
+  const skillGroups = groupSkillsByCategory(skills);
 
   // ── Resume management handlers ──
   const handleSwitchResume = async (id: number) => {
@@ -269,13 +270,20 @@ export default function ProfilePage() {
           <h3 className="font-semibold">🛠 技术栈</h3>
           <AddSkillBtn onAdded={() => qc.invalidateQueries({ queryKey: ["skills"] })} />
         </div>
-        <div className="flex flex-wrap gap-2">
-          {skills.map((s) => (
-            <span key={s.id} className="inline-flex items-center gap-1 text-xs bg-zinc-100 border border-zinc-200 rounded-lg px-2.5 py-1.5">
-              {s.name} <span className="text-zinc-400">·{s.proficiency}</span>
-              <button onClick={() => { if(confirm("删除此技能？")) { apiDelete(`/api/skills/${s.id}`).then(() => { qc.invalidateQueries({ queryKey: ["skills"] }); toast.success("已删除"); }).catch(() => toast.error("删除失败")); } }}
-                className="text-zinc-300 hover:text-red-400 ml-1 font-bold">×</button>
-            </span>
+        <div className="space-y-3">
+          {skillGroups.map((group) => (
+            <div key={group.key}>
+              <h4 className="text-sm font-medium text-zinc-600 mb-2">{group.label}</h4>
+              <div className="flex flex-wrap gap-2">
+                {group.skills.map((s) => (
+                  <span key={s.id} className="inline-flex items-center gap-1 text-xs bg-zinc-100 border border-zinc-200 rounded-lg px-2.5 py-1.5">
+                    {s.name} <span className="text-zinc-400">·{s.proficiency}</span>
+                    <button onClick={() => { if(confirm("删除此技能？")) { apiDelete(`/api/skills/${s.id}`).then(() => { qc.invalidateQueries({ queryKey: ["skills"] }); toast.success("已删除"); }).catch(() => toast.error("删除失败")); } }}
+                      className="text-zinc-300 hover:text-red-400 ml-1 font-bold">×</button>
+                  </span>
+                ))}
+              </div>
+            </div>
           ))}
           {skills.length === 0 && <span className="text-sm text-zinc-400">暂无技能记录。</span>}
         </div>
@@ -380,13 +388,17 @@ function AddSkillBtn({ onAdded }: { onAdded: () => void }) {
   const toast = useToast();
   const [name, setName] = useState("");
   const [proficiency, setProficiency] = useState("熟悉");
+  const [category, setCategory] = useState("other");
   const add = () => {
     if (!name.trim()) return;
-    apiPost("/api/skills", { category: "language", name, proficiency }).then(() => { setName(""); onAdded(); toast.success("已添加"); }).catch(() => toast.error("添加失败"));
+    apiPost("/api/skills", { category, name, proficiency }).then(() => { setName(""); onAdded(); toast.success("已添加"); }).catch(() => toast.error("添加失败"));
   };
   return (
     <div className="flex gap-2 items-center">
       <input placeholder="技能名" value={name} onChange={(e) => setName(e.target.value)} className="text-xs border border-zinc-200 rounded-lg px-2 py-1 w-28" />
+      <select aria-label="技能分类" value={category} onChange={(e) => setCategory(e.target.value)} className="text-xs border border-zinc-200 rounded-lg px-2 py-1">
+        {SKILL_CATEGORIES.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+      </select>
       <select value={proficiency} onChange={(e) => setProficiency(e.target.value)} className="text-xs border border-zinc-200 rounded-lg px-2 py-1">
         <option>了解</option><option>熟悉</option><option>精通</option>
       </select>
