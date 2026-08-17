@@ -10,6 +10,7 @@ from backend.src.models.job_context import JobContext
 from backend.src.models.profile import UserProfile
 from backend.src.models.session import ConversationSession, Message
 from backend.src.services import profile_service
+from backend.src.services.skill_categorizer import category_label
 
 
 @dataclass(frozen=True)
@@ -194,7 +195,7 @@ class ContextBuilder:
                 f"{skill.get('name', '')}({skill.get('proficiency', '')})"
             )
         for category, skills in skills_by_category.items():
-            parts.append(f"技能-{category}：{', '.join(skills)}")
+            parts.append(f"技能-{category_label(category)}：{', '.join(skills)}")
 
         rendered = _clip("\n".join(parts), self.budgets.profile)
         if not include_documents:

@@ -72,6 +72,28 @@ def test_profile_and_jd_have_independent_budgets() -> None:
     assert len(builder.format_jd(jd)) <= 30
 
 
+def test_profile_skill_groups_use_chinese_category_labels() -> None:
+    builder = ContextBuilder(None)
+    profile_data = {
+        "name": "Zoe",
+        "internships": [],
+        "projects": [],
+        "skills": [
+            {"category": "agent_llm", "name": "RAG", "proficiency": "熟悉"},
+            {"category": "unknown_category", "name": "Other", "proficiency": "了解"},
+        ],
+        "profile_docs": [],
+        "jd_docs": [],
+    }
+
+    rendered = builder.format_profile(profile_data, include_documents=False)
+
+    assert "技能-Agent 与 LLM 应用：RAG(熟悉)" in rendered
+    assert "技能-其他：Other(了解)" in rendered
+    assert "agent_llm" not in rendered
+    assert "unknown_category" not in rendered
+
+
 def test_history_contains_summary_and_recent_messages_once() -> None:
     db = _db()
     profile = UserProfile(name="Zoe", is_active=True)
