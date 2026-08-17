@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   MessageCircle,
   User,
@@ -30,24 +30,37 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
 
 export default function App() {
   const [page, setPage] = useState<Page>("conversation");
+  const [visitedPages, setVisitedPages] = useState<Set<Page>>(
+    () => new Set(["conversation"]),
+  );
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [settingsHighlight, setSettingsHighlight] = useState<string | null>(null);
+
+  const navigateTo = useCallback((nextPage: Page) => {
+    setVisitedPages((current) => {
+      if (current.has(nextPage)) return current;
+      const next = new Set(current);
+      next.add(nextPage);
+      return next;
+    });
+    setPage(nextPage);
+  }, []);
 
   // Listen for navigation events from child components
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (typeof detail === "object" && detail !== null && "page" in detail && (detail as Record<string,unknown>).page === "settings") {
-        setPage("settings");
+        navigateTo("settings");
         setSettingsHighlight((detail as Record<string,unknown>).highlight as string || null);
       } else if (typeof detail === "string") {
-        setPage(detail as Page);
+        navigateTo(detail as Page);
         setSettingsHighlight(null);
       }
     };
     window.addEventListener("navigate", handler);
     return () => window.removeEventListener("navigate", handler);
-  }, []);
+  }, [navigateTo]);
 
   return (
     <div className="flex h-screen bg-zinc-50">
@@ -61,7 +74,10 @@ export default function App() {
           {NAV_ITEMS.map((item) => (
             <button
               key={item.id}
-              onClick={() => setPage(item.id)}
+              onClick={() => {
+                navigateTo(item.id);
+                if (item.id !== "settings") setSettingsHighlight(null);
+              }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 page === item.id
                   ? "bg-zinc-100 text-zinc-900"
@@ -80,15 +96,45 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
-        <div key={page} className="animate-[fadeIn_0.2s_ease-out] h-full">
-          {page === "conversation" && <ConversationPage activeSessionId={activeSessionId} onSessionChange={setActiveSessionId} />}
-          {page === "profile" && <ProfilePage />}
-          {page === "jd" && <JDPage activeSessionId={activeSessionId} />}
-          {page === "review" && <ReviewPage />}
-          {page === "interview" && <InterviewPage />}
-          {page === "prompts" && <PromptTemplatePage />}
-        {page === "settings" && <SettingsPage highlight={settingsHighlight} />}
-        </div>
+        {visitedPages.has("conversation") && (
+          <div className={page === "conversation" ? "animate-[fadeIn_0.2s_ease-out] h-full" : "hidden"}>
+            <ConversationPage
+              activeSessionId={activeSessionId}
+              onSessionChange={setActiveSessionId}
+              isActive={page === "conversation"}
+            />
+          </div>
+        )}
+        {visitedPages.has("profile") && (
+          <div className={page === "profile" ? "animate-[fadeIn_0.2s_ease-out] h-full" : "hidden"}>
+            <ProfilePage />
+          </div>
+        )}
+        {visitedPages.has("jd") && (
+          <div className={page === "jd" ? "animate-[fadeIn_0.2s_ease-out] h-full" : "hidden"}>
+            <JDPage activeSessionId={activeSessionId} />
+          </div>
+        )}
+        {visitedPages.has("review") && (
+          <div className={page === "review" ? "animate-[fadeIn_0.2s_ease-out] h-full" : "hidden"}>
+            <ReviewPage />
+          </div>
+        )}
+        {visitedPages.has("interview") && (
+          <div className={page === "interview" ? "animate-[fadeIn_0.2s_ease-out] h-full" : "hidden"}>
+            <InterviewPage isActive={page === "interview"} />
+          </div>
+        )}
+        {visitedPages.has("prompts") && (
+          <div className={page === "prompts" ? "animate-[fadeIn_0.2s_ease-out] h-full" : "hidden"}>
+            <PromptTemplatePage />
+          </div>
+        )}
+        {visitedPages.has("settings") && (
+          <div className={page === "settings" ? "animate-[fadeIn_0.2s_ease-out] h-full" : "hidden"}>
+            <SettingsPage highlight={settingsHighlight} />
+          </div>
+        )}
       </main>
     </div>
   );

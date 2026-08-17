@@ -21,7 +21,7 @@ interface SessionItem {
   id: number; name: string; mode: string; updated_at: string;
 }
 
-export default function InterviewPage() {
+export default function InterviewPage({ isActive }: { isActive: boolean }) {
   const toast = useToast();
   const qc = useQueryClient();
   const { isConfigured: llmConfigured } = useLLMStatus();
@@ -111,7 +111,13 @@ export default function InterviewPage() {
   }, [sessionId, qc, toast, handleNewSession]);
 
   // Auto-scroll
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "instant" }); }, [messages, streamingText]);
+  useEffect(() => {
+    if (!isActive) return;
+    const frameId = requestAnimationFrame(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: "instant" });
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [messages, streamingText, isActive]);
 
   // ── Start interview ──
   const handleStart = useCallback(async () => {

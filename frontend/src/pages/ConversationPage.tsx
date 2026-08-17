@@ -23,9 +23,10 @@ interface Message {
 interface Props {
   activeSessionId: number | null;
   onSessionChange: (id: number) => void;
+  isActive: boolean;
 }
 
-export default function ConversationPage({ activeSessionId, onSessionChange }: Props) {
+export default function ConversationPage({ activeSessionId, onSessionChange, isActive }: Props) {
   const toast = useToast();
   const [generating, setGenerating] = useState(false);
   const [streamingText, setStreamingText] = useState("");
@@ -60,9 +61,12 @@ export default function ConversationPage({ activeSessionId, onSessionChange }: P
   const msgContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isNearBottom) return;
-    msgEndRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
-  }, [messages, streamingText, isNearBottom]);
+    if (!isActive || !isNearBottom) return;
+    const frameId = requestAnimationFrame(() => {
+      msgEndRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [messages, streamingText, isNearBottom, isActive]);
 
   const handleScroll = useCallback(() => {
     const el = msgContainerRef.current;
