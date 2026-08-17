@@ -8,12 +8,12 @@ from backend.src.llm.client import llm_client
 
 SKILL_CATEGORIES: dict[str, str] = {
     "programming_language": "编程语言",
-    "frontend_client": "前端/客户端",
-    "backend_data": "后端/数据",
-    "ai_algorithm": "AI/算法",
-    "agent_llm": "Agent/LLM",
-    "cloud_devops": "云/DevOps",
-    "software_engineering": "软件工程",
+    "frontend_client": "前端与客户端",
+    "backend_data": "后端与数据",
+    "ai_algorithm": "AI 与算法",
+    "agent_llm": "Agent 与 LLM 应用",
+    "cloud_devops": "云平台与 DevOps",
+    "software_engineering": "软件工程能力",
     "other": "其他",
 }
 
@@ -43,23 +43,22 @@ async def classify_existing_skills(skills: list[dict]) -> list[dict]:
 
     prompt = (
         "Classify each skill into exactly one of these category keys: "
-        f"{', '.join(SKILL_CATEGORIES)}. Unknown skills use other. "
+        f"{json.dumps(SKILL_CATEGORIES, ensure_ascii=False)}. Unknown skills use other. "
         'Return JSON only in this shape: {"classifications": '
         '[{"id": 1, "category": "agent_llm"}]}. '
         "Do not return Markdown, explanations, or any other fields.\n\n"
         f"Skills: {json.dumps(skills, ensure_ascii=False)}"
     )
-    try:
-        response = await llm_client.chat(
-            [{"role": "user", "content": prompt}],
-            temperature=0.1,
-            model=llm_client.fast_model(),
-        )
-        payload = json.loads(_without_markdown_fence(response))
-        classifications = payload.get("classifications", [])
-        if not isinstance(classifications, list):
-            classifications = []
-    except (TypeError, ValueError, json.JSONDecodeError):
+    response = await llm_client.chat(
+        [{"role": "user", "content": prompt}],
+        temperature=0.1,
+        model=llm_client.fast_model(),
+    )
+    payload = json.loads(_without_markdown_fence(response))
+    if not isinstance(payload, dict):
+        raise ValueError("classification response must be a JSON object")
+    classifications = payload.get("classifications", [])
+    if not isinstance(classifications, list):
         classifications = []
 
     category_by_id: dict[object, str] = {}
@@ -73,7 +72,12 @@ async def classify_existing_skills(skills: list[dict]) -> list[dict]:
 
     result = []
     for skill in skills:
-        classified = dict(skill)
-        classified["category"] = category_by_id.get(skill.get("id"), "other")
-        result.append(classified)
+        result.append(
+            {
+                "id": skill.get("id"),
+                "name": skill.get("name", ""),
+                "current_category": normalize_category(skill.get("category")),
+                "suggested_category": category_by_id.get(skill.get("id"), "other"),
+            }
+        )
     return result
